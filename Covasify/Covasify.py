@@ -264,6 +264,8 @@ class COVASIFYPlugin(PluginBase):
         self.sp = None
         self.current_track_info = None
         self.settings = {}
+        # Set in on_chat_start via helper.get_plugin_data_path(); used for bindings + OAuth cache
+        self._plugin_data_path = None
 
     def on_settings_changed(self, settings: dict):
         self.settings = settings
@@ -278,10 +280,14 @@ class COVASIFYPlugin(PluginBase):
         # Remove extra whitespace and lowercase
         return ' '.join(cleaned.lower().split())
     
+    def _get_data_path(self) -> str:
+        """Preferred path for persistent data (bindings, OAuth cache). Survives plugin updates."""
+        return self._plugin_data_path or self.get_plugin_folder_path()
+
     @override
-    
     def on_chat_start(self, helper: PluginHelper):
-        log('info', f"COVASIFY: Raw settings object = {self.settings}")
+        self._plugin_data_path = helper.get_plugin_data_path(self.plugin_manifest)
+        log('info', 'COVASIFY: Chat started')
 
         try:
             credentials = self.load_credentials()
@@ -310,7 +316,8 @@ class COVASIFYPlugin(PluginBase):
             helper.register_action('covasify_unbind', "Remove a specific phrase binding.", PhraseParams, self.covasify_unbind, 'global')
             helper.register_action('covasify_unbind_all', "Remove all phrase bindings.", EmptyParams, self.covasify_unbind_all, 'global')
             helper.register_action('covasify_cache_stats', "Show Covasify cache statistics.", EmptyParams, self.covasify_cache_stats, 'global')
-            log('info', 'COVASIFY: Actions registered successfully')
+            helper.register_status_generator(self.generate_binding_status)
+            log('info', 'COVASIFY: Actions and status generator registered successfully')
         except Exception as e:
             log('error', f'COVASIFY: Failed during chat start: {str(e)}')
 
@@ -327,7 +334,8 @@ class COVASIFYPlugin(PluginBase):
         
     @override
     def register_status_generators(self, helper: PluginHelper):
-        helper.register_status_generator(self.generate_binding_status)
+        # Status generator registered in on_chat_start per plugin development docs
+        pass
     
     def covasify_cache_stats(self, args, projected_states) -> str:
         """
@@ -404,19 +412,10 @@ class COVASIFYPlugin(PluginBase):
 
     def load_credentials(self) -> dict:
         try:
-            log('info', 'COVASIFY: Attempting to read credentials from Settings UI')
-
             # Settings are FLAT — not nested under "spotify_credentials"
             client_id = self.settings.get('client_id')
             client_secret = self.settings.get('client_secret')
             redirect_uri = self.settings.get('redirect_uri')
-
-            log(
-                'info',
-                f"COVASIFY: Settings read — client_id={client_id[:10] if client_id else None}..., "
-                f"client_secret={client_secret[:10] if client_secret else None}..., "
-                f"redirect_uri={redirect_uri}"
-            )
 
             # If UI settings are complete, use them
             if client_id and client_secret:
@@ -459,9 +458,13 @@ class COVASIFYPlugin(PluginBase):
 
     def initialize_spotify(self, credentials: dict):
         try:
-            log('info', f"COVASIFY: Initializing Spotify with Client ID: {credentials['CLIENT_ID'][:10]}...")
-            plugin_folder = self.get_plugin_folder_path()
-            cache_path = os.path.join(plugin_folder, '_spotify_cache')
+            log('info', "COVASIFY: Initializing Spotify")
+            data_path = self._get_data_path()
+            try:
+                os.makedirs(data_path, exist_ok=True)
+            except OSError:
+                pass
+            cache_path = os.path.join(data_path, '_spotify_cache')
 
             auth_manager = SpotifyOAuth(
                 client_id=credentials['CLIENT_ID'],
@@ -1211,9 +1214,13 @@ class COVASIFYPlugin(PluginBase):
             return f"COVASIFY: Failed to remove track - {str(e)}"
 
     def get_bindings_file(self) -> str:
-        """Get path to bindings JSON file"""
-        plugin_folder = self.get_plugin_folder_path()
-        return os.path.join(plugin_folder, 'spotify_bindings.json')
+        """Get path to bindings JSON file (uses plugin data path when available so bindings survive updates)."""
+        base = self._get_data_path()
+        try:
+            os.makedirs(base, exist_ok=True)
+        except OSError:
+            pass
+        return os.path.join(base, 'spotify_bindings.json')
 
     def load_bindings(self) -> dict:
         """Load track bindings from file"""

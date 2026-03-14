@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Package Covasify plugin
+        run: |
+          mkdir -p dist
+          zip -r dist/covasify-linux.zip Covasify \
+            -x "Covasify/_spotify_cache*" \
+            -x "Covasify/.spotify_cache*" \
+            -x "Covasify/__pycache__/*" \
+            -x "Covasify/*/__pycache__/*" \
+            -x "Covasify/*/*/__pycache__/*" \
+            -x "Covasify/deps/*/__pycache__/*" \
+            -x "*.pyc" \
+            -x "*.pyo"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: dist/covasify-linux.zip
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Package Covasify plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\pack | Out-Null
+          Copy-Item -Path Covasify -Destination dist\pack\Covasify -Recurse -Force
+          $plugin = "dist\pack\Covasify"
+          Get-ChildItem -Path $plugin -Recurse -Include __pycache__ | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path $plugin -Recurse -Include *.pyc,*.pyo | Remove-Item -Force -ErrorAction SilentlyContinue
+          if (Test-Path "$plugin\_spotify_cache") { Remove-Item "$plugin\_spotify_cache" -Recurse -Force }
+          if (Test-Path "$plugin\.spotify_cache") { Remove-Item "$plugin\.spotify_cache" -Recurse -Force }
+          Compress-Archive -Path dist\pack\Covasify -DestinationPath dist/covasify-windows.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/covasify-windows.zip
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
