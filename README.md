@@ -1,3 +1,6 @@
+ASSUME ALL PLUGINS DEAD EXCEPT COVASIFY!
+
+
 # COVAS-NEXT-PLUGINS 
 This repository contains individual plugin packages for COVAS:NEXT (https://ratherrude.github.io/Elite-Dangerous-AI-Integration/)
 Each plugin has its own README with installation instructions and usage details.
