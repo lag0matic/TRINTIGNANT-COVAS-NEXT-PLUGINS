@@ -2,8 +2,8 @@ from typing_extensions import override
 import json
 import os
 import sys
-import string  # For punctuation stripping
-import re  # For time parsing
+import string
+import re
 import time
 import threading
 from datetime import datetime
@@ -11,9 +11,7 @@ from pydantic import BaseModel
 from typing import Optional
 import webbrowser
 
-
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
 import urllib.parse as urlparse
 
 class SpotifyAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -36,7 +34,7 @@ class SpotifyAuthCallbackHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         return  # silence HTTP server logs
-        
+
 def start_spotify_callback_server():
     server = HTTPServer(("127.0.0.1", 8888), SpotifyAuthCallbackHandler)
     thread = threading.Thread(target=server.serve_forever)
@@ -44,13 +42,12 @@ def start_spotify_callback_server():
     thread.start()
     return server
 
-# Set up deps path BEFORE importing spotipy (like Songbird does with deps)
+# Set up deps path BEFORE importing spotipy
 current_dir = os.path.dirname(os.path.abspath(__file__))
 deps_path = os.path.join(current_dir, 'deps')
 if deps_path not in sys.path:
     sys.path.insert(0, deps_path)
 
-# Now import spotipy at module level
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
@@ -60,39 +57,42 @@ from lib.Logger import log
 from lib.EventManager import Projection
 from lib.PluginBase import PluginBase, PluginManifest
 from lib.Event import Event
+
+# ============================================================================
+# PARAM MODELS
+# Consolidated from 7 models down to 4.
+# ============================================================================
+
 class EmptyParams(BaseModel):
     pass
 
-class QueryParams(BaseModel):
+class PlayParams(BaseModel):
+    type: str               # "track", "artist", "artist_top", "album", "playlist"
     query: str
-
-class QueryShuffleParams(BaseModel):
-    query: str
-    shuffle: Optional[bool] = True
-
-class QueryNoShuffleParams(BaseModel):
-    query: str
-    shuffle: Optional[bool] = False
+    shuffle: Optional[bool] = None  # None = use sensible default per type
 
 class ControlParams(BaseModel):
-    command: str
+    command: str            # see covasify_control for full list; seek uses value_str
     value: Optional[int] = None
+    value_str: Optional[str] = None  # used for seek (e.g. "2:30" or "150")
 
-class SeekParams(BaseModel):
-    time_input: str
+class LibraryParams(BaseModel):
+    action: str             # "save", "remove"
 
-class PhraseParams(BaseModel):
-    phrase: str
+class BindingsParams(BaseModel):
+    action: str             # "bind", "play", "list", "remove", "clear"
+    phrase: Optional[str] = None
+
 # ============================================================================
 # RELIABILITY CLIENT - Caching System (from Covinance v7.6)
 # ============================================================================
 
 class ReliabilityClient:
     """Caching wrapper for Spotify API calls - 1 hour cache TTL"""
-    
-    TTL_DEFAULT = 3600  # 1 hour
+
+    TTL_DEFAULT = 3600
     INFLIGHT_WAIT_TIMEOUT = 30
-    
+
     def __init__(self):
         self.cache = {}
         self.lock = threading.RLock()
@@ -104,14 +104,14 @@ class ReliabilityClient:
             'api_calls': 0,
             'errors': 0
         }
-    
+
     def _make_cache_key(self, endpoint, params):
         param_str = json.dumps(params, sort_keys=True) if params else ""
         return f"{endpoint}:{param_str}"
-    
+
     def get_cached_or_fetch(self, endpoint, params, fetch_fn):
         key = self._make_cache_key(endpoint, params)
-        
+
         with self.lock:
             if key in self.cache:
                 cached_data, cached_time, cached_ttl = self.cache[key]
@@ -120,11 +120,11 @@ class ReliabilityClient:
                     self.stats['cache_hits'] += 1
                     log('info', f'COVASIFY: Cache HIT for {endpoint} (age: {age:.1f}s)')
                     return cached_data
-            
+
             if key in self.in_flight:
                 event, result_holder = self.in_flight[key]
                 log('info', f'COVASIFY: In-flight HIT for {endpoint}')
-        
+
         if key in self.in_flight:
             event.wait(timeout=self.INFLIGHT_WAIT_TIMEOUT)
             with self.lock:
@@ -134,7 +134,7 @@ class ReliabilityClient:
                     if age < cached_ttl:
                         self.stats['inflight_hits'] += 1
                         return cached_data
-        
+
         with self.lock:
             if key not in self.in_flight:
                 event = threading.Event()
@@ -142,7 +142,7 @@ class ReliabilityClient:
                 self.in_flight[key] = (event, result_holder)
             else:
                 event, result_holder = self.in_flight[key]
-        
+
         if result_holder[0] is not None or result_holder[1] is not None:
             event.wait(timeout=self.INFLIGHT_WAIT_TIMEOUT)
             with self.lock:
@@ -150,14 +150,14 @@ class ReliabilityClient:
                     return self.cache[key][0]
                 if result_holder[1] is not None:
                     raise result_holder[1]
-        
+
         ttl = self.TTL_DEFAULT
         last_error = None
         result = None
-        
+
         with self.lock:
             self.stats['cache_misses'] += 1
-        
+
         try:
             for attempt in range(3):
                 try:
@@ -165,22 +165,22 @@ class ReliabilityClient:
                         self.stats['api_calls'] += 1
                     log('info', f'COVASIFY: Cache MISS - Fetching {endpoint} (attempt {attempt + 1}/3)')
                     result = fetch_fn(endpoint, params)
-                    
+
                     is_error = (isinstance(result, dict) and 'error' in result) or result is None
-                    
+
                     if is_error:
                         error_msg = result.get('error') if isinstance(result, dict) else 'None'
                         log('warning', f'COVASIFY: Not caching error for {endpoint}: {error_msg}')
                         with self.lock:
                             result_holder[0] = result
                         return result
-                    
+
                     with self.lock:
                         self.cache[key] = (result, datetime.now(), ttl)
                         result_holder[0] = result
-                    
+
                     return result
-                    
+
                 except Exception as e:
                     last_error = e
                     if attempt < 2:
@@ -189,11 +189,11 @@ class ReliabilityClient:
                         time.sleep(wait)
                     else:
                         log('error', f'COVASIFY: Failed after 3 attempts: {str(e)}')
-            
+
             with self.lock:
                 result_holder[1] = last_error
             raise last_error
-            
+
         finally:
             with self.lock:
                 if key in self.in_flight:
@@ -205,7 +205,6 @@ class ReliabilityClient:
         with self.lock:
             total = self.stats['cache_hits'] + self.stats['cache_misses']
             hit_rate = (self.stats['cache_hits'] / total * 100) if total > 0 else 0
-            
             return {
                 'cache_hit_rate': f"{hit_rate:.1f}%",
                 'total_requests': total,
@@ -213,9 +212,11 @@ class ReliabilityClient:
                 **self.stats
             }
 
-# Main plugin class
+# ============================================================================
+# MAIN PLUGIN CLASS
+# ============================================================================
+
 class COVASIFYPlugin(PluginBase):
-    # SETTINGS MUST BE HERE — CLASS LEVEL, NOT IN __init__
     settings_config = PluginSettings(
         key="COVASIFYPlugin",
         label="Covasify Spotify Integration",
@@ -253,71 +254,69 @@ class COVASIFYPlugin(PluginBase):
             )
         ]
     )
+
     @override
     def get_settings_config(self):
         return self.settings_config
 
     def __init__(self, plugin_manifest: PluginManifest):
         super().__init__(plugin_manifest)
-        
         self.reliability_client = ReliabilityClient()
         self.sp = None
         self.current_track_info = None
         self.settings = {}
-        # Set in on_chat_start via helper.get_plugin_data_path(); used for bindings + OAuth cache
-        self._plugin_data_path = None
 
     def on_settings_changed(self, settings: dict):
         self.settings = settings
-
 
     def normalize_phrase(self, phrase: str) -> str:
         """Normalize phrase for matching: lowercase + strip punctuation + trim whitespace"""
         if not phrase:
             return ""
-        # Remove punctuation
         cleaned = phrase.translate(str.maketrans('', '', string.punctuation))
-        # Remove extra whitespace and lowercase
         return ' '.join(cleaned.lower().split())
-    
-    def _get_data_path(self) -> str:
-        """Preferred path for persistent data (bindings, OAuth cache). Survives plugin updates."""
-        return self._plugin_data_path or self.get_plugin_folder_path()
+
+    # -------------------------------------------------------------------------
+    # LIFECYCLE
+    # -------------------------------------------------------------------------
 
     @override
     def on_chat_start(self, helper: PluginHelper):
-        self._plugin_data_path = helper.get_plugin_data_path(self.plugin_manifest)
-        log('info', 'COVASIFY: Chat started')
-
+        log('info', f"COVASIFY: Raw settings object = {self.settings}")
         try:
             credentials = self.load_credentials()
             if credentials:
                 self.initialize_spotify(credentials)
                 log('info', 'COVASIFY: Spotify initialized successfully')
 
-            helper.register_action('covasify_test', "Test Covasify functionality", EmptyParams, self.covasify_test, 'global')
-            helper.register_action('covasify_play_track', "Search for a track on Spotify and play it.", QueryParams, self.covasify_play_track, 'global')
+            # 5 consolidated tools instead of 15
+            helper.register_action(
+                'covasify_play',
+                "Play music on Spotify. type: track/artist/artist_top/album/playlist. shuffle optional.",
+                PlayParams, self.covasify_play, 'global'
+            )
             helper.register_action(
                 'covasify_control',
-                "Control Spotify playback: pause, resume, next, previous, restart, stop, volume_up, volume_down, volume_set, mute, unmute, shuffle_on, shuffle_off, repeat_track, repeat_context, repeat_off.",
+                "Control Spotify: pause/resume/next/previous/restart, volume_up/down/set/mute/unmute, shuffle_on/off, repeat_track/context/off, seek (use value_str for position e.g. '2:30').",
                 ControlParams, self.covasify_control, 'global'
             )
-            helper.register_action('covasify_seek', "Seek to a position in the current track. Accepts 'MM:SS', 'H:MM:SS', or total seconds.", SeekParams, self.covasify_seek, 'global')
-            helper.register_action('covasify_current', "Get info about the currently playing Spotify track.", EmptyParams, self.covasify_current, 'global')
-            helper.register_action('covasify_play_playlist', "Play a Spotify playlist by name, or 'liked songs' for saved tracks.", QueryShuffleParams, self.covasify_play_playlist, 'global')
-            helper.register_action('covasify_play_artist', "Play music from an artist on Spotify.", QueryShuffleParams, self.covasify_play_artist, 'global')
-            helper.register_action('covasify_play_top_tracks', "Play an artist's top 10 most popular tracks.", QueryParams, self.covasify_play_top_tracks, 'global')
-            helper.register_action('covasify_play_album', "Play a complete album on Spotify.", QueryNoShuffleParams, self.covasify_play_album, 'global')
-            helper.register_action('covasify_save_track', "Save the currently playing track to Liked Songs.", EmptyParams, self.covasify_save_track, 'global')
-            helper.register_action('covasify_remove_track', "Remove the currently playing track from Liked Songs.", EmptyParams, self.covasify_remove_track, 'global')
-            helper.register_action('covasify_bind_track', "Bind the currently playing track to a custom voice phrase.", PhraseParams, self.covasify_bind_track, 'global')
-            helper.register_action('covasify_play_bound', "Play the track bound to a given phrase.", PhraseParams, self.covasify_play_bound, 'global')
-            helper.register_action('covasify_list_bindings', "List all phrase-to-track bindings.", EmptyParams, self.covasify_list_bindings, 'global')
-            helper.register_action('covasify_unbind', "Remove a specific phrase binding.", PhraseParams, self.covasify_unbind, 'global')
-            helper.register_action('covasify_unbind_all', "Remove all phrase bindings.", EmptyParams, self.covasify_unbind_all, 'global')
-            helper.register_action('covasify_cache_stats', "Show Covasify cache statistics.", EmptyParams, self.covasify_cache_stats, 'global')
-            helper.register_status_generator(self.generate_binding_status)
-            log('info', 'COVASIFY: Actions and status generator registered successfully')
+            helper.register_action(
+                'covasify_library',
+                "Manage liked songs. action: save/remove current track.",
+                LibraryParams, self.covasify_library, 'global'
+            )
+            helper.register_action(
+                'covasify_bindings',
+                "Manage voice phrase bindings. action: bind/play/list/remove/clear. phrase required for bind/play/remove.",
+                BindingsParams, self.covasify_bindings, 'global'
+            )
+            helper.register_action(
+                'covasify_status',
+                "Get current Spotify track details on demand.",
+                EmptyParams, self.covasify_status, 'global'
+            )
+
+            log('info', 'COVASIFY: Actions registered successfully')
         except Exception as e:
             log('error', f'COVASIFY: Failed during chat start: {str(e)}')
 
@@ -327,80 +326,673 @@ class COVASIFYPlugin(PluginBase):
     @override
     def register_sideeffects(self, helper: PluginHelper):
         pass
-        
+
     @override
     def register_prompt_event_handlers(self, helper: PluginHelper):
         pass
-        
+
     @override
     def register_status_generators(self, helper: PluginHelper):
-        # Status generator registered in on_chat_start per plugin development docs
-        pass
-    
-    def covasify_cache_stats(self, args, projected_states) -> str:
-        """
-        Get cache performance statistics.
-        
-        Shows cache hit rate, total requests, API calls saved, etc.
-        
-        Returns: Cache performance metrics
-        """
-        try:
-            stats = self.reliability_client.get_stats()
-            
-            return (
-                f"COVASIFY: Cache Performance\n"
-                f"Hit Rate: {stats['cache_hit_rate']}\n"
-                f"Total Requests: {stats['total_requests']}\n"
-                f"API Calls Saved: {stats['api_calls_saved']}\n"
-                f"Cache Hits: {stats['cache_hits']}\n"
-                f"Cache Misses: {stats['cache_misses']}\n"
-                f"In-Flight Hits: {stats['inflight_hits']}"
-            )
-        except Exception as e:
-            log('error', f'COVASIFY: Error getting cache stats: {str(e)}')
-            return f"COVASIFY: Error retrieving cache statistics: {str(e)}"
-    
-    def generate_binding_status(self, projected_states: dict[str, dict]) -> list[tuple[str, str]]:
-        """Generate status about track bindings for COVAS context"""
-        try:
-            bindings = self.load_bindings()
-            
-            if not bindings:
-                return [("Covasify Bindings", "No tracks bound to phrases")]
-            
-            # List bindings concisely
-            binding_count = len(bindings)
-            binding_phrases = list(bindings.keys())
-            
-            if binding_count <= 3:
-                phrase_list = ", ".join([f"'{p}'" for p in binding_phrases])
-                return [("Covasify Bindings", f"{binding_count} track(s): {phrase_list}")]
-            else:
-                # Just show count for many bindings
-                return [("Covasify Bindings", f"{binding_count} bindings active")]
-                
-        except Exception as e:
-            log('error', f'COVASIFY: Error generating binding status: {str(e)}')
-            return [("Covasify Bindings", "System available")]
+        helper.register_status_generator(self.generate_spotify_status)
 
     @override
     def register_should_reply_handlers(self, helper: PluginHelper):
         pass
-    
+
     @override
     def on_plugin_helper_ready(self, helper: PluginHelper):
         log('info', 'COVASIFY: Plugin helper is ready')
-    
+
     @override
     def on_chat_stop(self, helper: PluginHelper):
         log('info', 'COVASIFY: Chat stopped')
 
-    def get_plugin_folder_path(self) -> str:
-        """Get the path to the plugin folder (same structure as Songbird)"""
+    # -------------------------------------------------------------------------
+    # STATUS GENERATOR
+    # Reads from local cache only — no Spotify API call, zero extra cost.
+    # Pause/resume state is reflected here passively each turn.
+    # -------------------------------------------------------------------------
+
+    def generate_spotify_status(self, projected_states: dict) -> list[tuple[str, str]]:
+        """Push current playback state into context each turn from local cache."""
         try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            return current_dir
+            if not self.sp:
+                return [("Spotify", "Not connected")]
+
+            info = self.current_track_info
+            if not info:
+                return [("Spotify", "No track playing")]
+
+            name = info.get('track_name', 'Unknown')
+            artist = info.get('artist_name', 'Unknown')
+            state = info.get('state', 'playing')
+            label = "Paused" if state == "paused" else "Playing"
+
+            # Include bindings count only if any exist, to keep status compact
+            bindings = self.load_bindings()
+            binding_note = f" | {len(bindings)} binding(s)" if bindings else ""
+
+            return [("Spotify", f"{label}: {name} — {artist}{binding_note}")]
+
+        except Exception as e:
+            log('error', f'COVASIFY: Error generating status: {str(e)}')
+            return [("Spotify", "Connected")]
+
+    # -------------------------------------------------------------------------
+    # CONSOLIDATED TOOL: covasify_play
+    # Replaces: covasify_play_track, covasify_play_artist, covasify_play_top_tracks,
+    #           covasify_play_album, covasify_play_playlist
+    # -------------------------------------------------------------------------
+
+    def covasify_play(self, args, projected_states) -> str:
+        """Route play requests by type."""
+        try:
+            if not self.sp:
+                return "COVASIFY: Not connected to Spotify. Check credentials."
+
+            play_type = (args.type or '').lower().strip()
+
+            if play_type == 'track':
+                return self._play_track(args.query)
+            elif play_type == 'artist':
+                return self._play_artist(args.query, shuffle=args.shuffle if args.shuffle is not None else True)
+            elif play_type == 'artist_top':
+                return self._play_artist_top(args.query)
+            elif play_type == 'album':
+                return self._play_album(args.query, shuffle=args.shuffle if args.shuffle is not None else False)
+            elif play_type == 'playlist':
+                return self._play_playlist(args.query, shuffle=args.shuffle if args.shuffle is not None else True)
+            else:
+                return f"COVASIFY: Unknown play type '{play_type}'. Use: track, artist, artist_top, album, playlist."
+
+        except Exception as e:
+            log('error', f'COVASIFY play error: {str(e)}')
+            return f"COVASIFY: Play failed - {str(e)}"
+
+    def _get_device_id(self) -> Optional[str]:
+        """Get first available Spotify device ID."""
+        devices = self.sp.devices()
+        if not devices['devices']:
+            return None
+        return devices['devices'][0]['id']
+
+    def _play_track(self, query: str) -> str:
+        if not query:
+            return "COVASIFY: No search query provided."
+
+        log('info', f'COVASIFY: Searching for track: {query}')
+
+        def search_track(endpoint, params):
+            return self.sp.search(q=params['q'], type='track', limit=10)
+
+        results = self.reliability_client.get_cached_or_fetch(
+            'spotify_search_track', {'q': query}, search_track
+        )
+
+        if not results['tracks']['items']:
+            return f"COVASIFY: No tracks found for '{query}'."
+
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        def score_track(t):
+            name = t['name'].lower()
+            artist = t['artists'][0]['name'].lower()
+            combined = f"{name} {artist}"
+            combined_words = set(combined.split())
+            overlap = len(query_words & combined_words)
+            exact = 2 if query_lower in combined else 0
+            length_diff = abs(len(name) - len(query_lower))
+            return overlap + exact - (length_diff * 0.05)
+
+        track = max(results['tracks']['items'], key=score_track)
+        track_name = track['name']
+        artist_name = track['artists'][0]['name']
+        track_uri = track['uri']
+        album_uri = track['album']['uri']
+
+        device_id = self._get_device_id()
+        if not device_id:
+            return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
+
+        self.sp.transfer_playback(device_id, force_play=True)
+        self.sp.start_playback(device_id=device_id, context_uri=album_uri, offset={"uri": track_uri})
+        self.update_current_track_info()
+
+        log('info', f'COVASIFY: Playing {track_name} by {artist_name}')
+        return f"COVASIFY: Now playing '{track_name}' by {artist_name}."
+
+    def _play_artist(self, query: str, shuffle: bool = True) -> str:
+        if not query:
+            return "COVASIFY: No artist provided."
+
+        log('info', f'COVASIFY: Playing artist: {query}')
+
+        def search_artist(endpoint, params):
+            return self.sp.search(q=params['q'], type='artist', limit=1)
+
+        artist_results = self.reliability_client.get_cached_or_fetch(
+            'spotify_search_artist', {'q': query}, search_artist
+        )
+
+        if not artist_results['artists']['items']:
+            return f"COVASIFY: Could not find artist '{query}'."
+
+        artist = artist_results['artists']['items'][0]
+        artist_name = artist['name']
+        artist_uri = f"spotify:artist:{artist['id']}"
+
+        device_id = self._get_device_id()
+        if not device_id:
+            return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
+
+        self.sp.start_playback(device_id=device_id, context_uri=artist_uri)
+        if shuffle:
+            self.sp.shuffle(True, device_id=device_id)
+
+        self.update_current_track_info()
+        log('info', f'COVASIFY: Playing {artist_name} (shuffle: {shuffle})')
+        return f"COVASIFY: Playing {artist_name}{' (shuffled)' if shuffle else ''}."
+
+    def _play_artist_top(self, query: str) -> str:
+        if not query:
+            return "COVASIFY: No artist provided."
+
+        log('info', f'COVASIFY: Getting top tracks for: {query}')
+
+        def search_artist(endpoint, params):
+            return self.sp.search(q=params['q'], type='artist', limit=1)
+
+        artist_results = self.reliability_client.get_cached_or_fetch(
+            'spotify_search_artist', {'q': query}, search_artist
+        )
+
+        if not artist_results['artists']['items']:
+            return f"COVASIFY: Could not find artist '{query}'."
+
+        artist = artist_results['artists']['items'][0]
+        artist_name = artist['name']
+        artist_id = artist['id']
+
+        top_tracks = self.sp.artist_top_tracks(artist_id)
+        if not top_tracks['tracks']:
+            return f"COVASIFY: No top tracks found for {artist_name}."
+
+        track_uris = [track['uri'] for track in top_tracks['tracks']]
+
+        device_id = self._get_device_id()
+        if not device_id:
+            return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
+
+        self.sp.start_playback(device_id=device_id, uris=track_uris)
+        self.update_current_track_info()
+
+        log('info', f'COVASIFY: Playing {len(track_uris)} top tracks by {artist_name}')
+        return f"COVASIFY: Playing {len(track_uris)} most popular songs by {artist_name}."
+
+    def _play_album(self, query: str, shuffle: bool = False) -> str:
+        if not query:
+            return "COVASIFY: No album name provided."
+
+        log('info', f'COVASIFY: Searching for album: {query}')
+
+        def search_album(endpoint, params):
+            return self.sp.search(q=params['q'], type='album', limit=1)
+
+        album_results = self.reliability_client.get_cached_or_fetch(
+            'spotify_search_album', {'q': query}, search_album
+        )
+
+        if not album_results['albums']['items']:
+            return f"COVASIFY: Could not find album '{query}'."
+
+        album = album_results['albums']['items'][0]
+        album_name = album['name']
+        artist_name = album['artists'][0]['name']
+        album_uri = album['uri']
+        total_tracks = album['total_tracks']
+
+        device_id = self._get_device_id()
+        if not device_id:
+            return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
+
+        self.sp.start_playback(device_id=device_id, context_uri=album_uri)
+        if shuffle:
+            self.sp.shuffle(True, device_id=device_id)
+
+        self.update_current_track_info()
+        log('info', f'COVASIFY: Playing album "{album_name}" by {artist_name}')
+        return f"COVASIFY: Playing '{album_name}' by {artist_name} ({total_tracks} tracks){' (shuffled)' if shuffle else ''}."
+
+    def _play_playlist(self, query: str, shuffle: bool = True) -> str:
+        if not query:
+            return "COVASIFY: No playlist name provided."
+
+        log('info', f'COVASIFY: Searching for playlist: {query}')
+
+        device_id = self._get_device_id()
+        if not device_id:
+            return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
+
+        query_lower = query.lower()
+
+        # Handle Liked Songs specially
+        if 'liked' in query_lower or 'saved' in query_lower or 'favorite' in query_lower:
+            saved_tracks = self.sp.current_user_saved_tracks(limit=50)
+            if not saved_tracks['items']:
+                return "COVASIFY: No liked songs found."
+            track_uris = [item['track']['uri'] for item in saved_tracks['items']]
+            self.sp.start_playback(device_id=device_id, uris=track_uris)
+            if shuffle:
+                self.sp.shuffle(True, device_id=device_id)
+            self.update_current_track_info()
+            return f"COVASIFY: Playing your Liked Songs{' (shuffled)' if shuffle else ''}."
+
+        def search_playlist(endpoint, params):
+            return self.sp.search(q=params['q'], type='playlist', limit=5)
+
+        results = self.reliability_client.get_cached_or_fetch(
+            'spotify_search_playlist', {'q': query}, search_playlist
+        )
+
+        if not results['playlists']['items']:
+            return f"COVASIFY: No playlists found for '{query}'."
+
+        playlist = results['playlists']['items'][0]
+        playlist_name = playlist['name']
+        playlist_uri = playlist['uri']
+
+        if not playlist_uri:
+            return f"COVASIFY: Found playlist '{playlist_name}' but cannot access it."
+
+        self.sp.start_playback(device_id=device_id, context_uri=playlist_uri)
+        if shuffle:
+            self.sp.shuffle(True, device_id=device_id)
+
+        self.update_current_track_info()
+        log('info', f'COVASIFY: Playing playlist {playlist_name}')
+        return f"COVASIFY: Playing playlist '{playlist_name}'{' (shuffled)' if shuffle else ''}."
+
+    # -------------------------------------------------------------------------
+    # CONSOLIDATED TOOL: covasify_control
+    # Replaces: covasify_control + covasify_seek (seek is now command="seek")
+    # -------------------------------------------------------------------------
+
+    def covasify_control(self, args, projected_states) -> str:
+        """Control Spotify playback. Seek via command='seek' with value_str='MM:SS'."""
+        try:
+            if not self.sp:
+                return "COVASIFY: Not connected to Spotify."
+
+            command = args.command.lower()
+            log('info', f'COVASIFY: Control command: {command}')
+
+            if command in ['pause', 'stop']:
+                self.sp.pause_playback()
+                self._set_track_state('paused')
+                return "COVASIFY: Playback paused."
+
+            elif command in ['resume', 'play', 'unpause']:
+                self.sp.start_playback()
+                self._set_track_state('playing')
+                return "COVASIFY: Playback resumed."
+
+            elif command in ['next', 'skip', 'skip_forward', 'next_track']:
+                self.sp.next_track()
+                self.update_current_track_info()
+                return "COVASIFY: Skipped to next track."
+
+            elif command in ['previous', 'back', 'skip_back', 'previous_track']:
+                self.sp.previous_track()
+                self.update_current_track_info()
+                return "COVASIFY: Skipped to previous track."
+
+            elif command in ['restart', 'restart_track', 'restart_song', 'start_over', 'from_beginning']:
+                current = self.sp.current_playback()
+                if current and current.get('device'):
+                    self.sp.seek_track(position_ms=0, device_id=current['device']['id'])
+                    return "COVASIFY: Restarted current track from beginning."
+                return "COVASIFY: No active playback to restart."
+
+            elif command in ['volume_up', 'louder', 'increase_volume']:
+                current = self.sp.current_playback()
+                if current and current.get('device'):
+                    new_volume = min(100, current['device']['volume_percent'] + 10)
+                    self.sp.volume(new_volume)
+                    return f"COVASIFY: Volume increased to {new_volume}%."
+                return "COVASIFY: No active playback to adjust volume."
+
+            elif command in ['volume_down', 'quieter', 'decrease_volume']:
+                current = self.sp.current_playback()
+                if current and current.get('device'):
+                    new_volume = max(0, current['device']['volume_percent'] - 10)
+                    self.sp.volume(new_volume)
+                    return f"COVASIFY: Volume decreased to {new_volume}%."
+                return "COVASIFY: No active playback to adjust volume."
+
+            elif command in ['volume_set', 'set_volume']:
+                value = max(0, min(100, args.value if args.value is not None else 50))
+                self.sp.volume(value)
+                return f"COVASIFY: Volume set to {value}%."
+
+            elif command in ['mute', 'silence']:
+                self.sp.volume(0)
+                return "COVASIFY: Muted."
+
+            elif command in ['unmute', 'unsilence']:
+                self.sp.volume(50)
+                return "COVASIFY: Unmuted to 50%."
+
+            elif command in ['shuffle_on', 'enable_shuffle', 'shuffle']:
+                self.sp.shuffle(True)
+                return "COVASIFY: Shuffle enabled."
+
+            elif command in ['shuffle_off', 'disable_shuffle', 'no_shuffle']:
+                self.sp.shuffle(False)
+                return "COVASIFY: Shuffle disabled."
+
+            elif command in ['repeat_track', 'repeat_song', 'repeat_one']:
+                self.sp.repeat('track')
+                return "COVASIFY: Repeat track enabled."
+
+            elif command in ['repeat_context', 'repeat_all', 'repeat_playlist']:
+                self.sp.repeat('context')
+                return "COVASIFY: Repeat all enabled."
+
+            elif command in ['repeat_off', 'disable_repeat', 'no_repeat']:
+                self.sp.repeat('off')
+                return "COVASIFY: Repeat disabled."
+
+            elif command in ['seek']:
+                # Seek is now part of control — value_str holds the time input
+                time_input = args.value_str
+                if not time_input:
+                    return "COVASIFY: No seek position provided. Use value_str e.g. '2:30' or '150'."
+                return self._seek(time_input.strip())
+
+            else:
+                return f"COVASIFY: Unknown command '{command}'."
+
+        except Exception as e:
+            log('error', f'COVASIFY control error: {str(e)}')
+            return f"COVASIFY: Control failed - {str(e)}"
+
+    def _seek(self, time_input: str) -> str:
+        """Seek to position in current track."""
+        position_ms = self._parse_time_to_ms(time_input)
+        if position_ms is None:
+            return f"COVASIFY: Could not parse time '{time_input}'. Use format like '2:30' or '150' seconds."
+
+        current = self.sp.current_playback()
+        if not current or not current.get('item'):
+            return "COVASIFY: No track currently playing to seek."
+
+        track = current['item']
+        duration_ms = track.get('duration_ms', 0)
+
+        if position_ms > duration_ms:
+            duration_min = duration_ms // 60000
+            duration_sec = (duration_ms % 60000) // 1000
+            return f"COVASIFY: Position exceeds track duration ({duration_min}:{duration_sec:02d})."
+
+        self.sp.seek_track(position_ms, device_id=current['device']['id'])
+        seek_min = position_ms // 60000
+        seek_sec = (position_ms % 60000) // 1000
+        return f"COVASIFY: Seeked to {seek_min}:{seek_sec:02d} in '{track['name']}'."
+
+    def _parse_time_to_ms(self, time_input: str) -> Optional[int]:
+        """Parse time string to milliseconds — handles MM:SS, H:MM:SS, or seconds."""
+        try:
+            time_input = time_input.strip().lower()
+            time_input = re.sub(r'minutes?|seconds?|and', '', time_input).strip()
+
+            if time_input.isdigit():
+                return int(time_input) * 1000
+
+            if ':' in time_input:
+                parts = time_input.split(':')
+                if len(parts) == 2:
+                    return (int(parts[0]) * 60 + int(parts[1])) * 1000
+                elif len(parts) == 3:
+                    return (int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])) * 1000
+
+            numbers = re.findall(r'\d+', time_input)
+            if len(numbers) == 2:
+                return (int(numbers[0]) * 60 + int(numbers[1])) * 1000
+            elif len(numbers) == 1:
+                return int(numbers[0]) * 1000
+
+            return None
+        except Exception as e:
+            log('error', f'COVASIFY: Error parsing time {time_input}: {str(e)}')
+            return None
+
+    # -------------------------------------------------------------------------
+    # CONSOLIDATED TOOL: covasify_library
+    # Replaces: covasify_save_track, covasify_remove_track
+    # -------------------------------------------------------------------------
+
+    def covasify_library(self, args, projected_states) -> str:
+        """Save or remove the current track from Liked Songs."""
+        try:
+            if not self.sp:
+                return "COVASIFY: Not connected to Spotify."
+
+            action = (args.action or '').lower()
+
+            current = self.sp.current_playback()
+            if not current or not current.get('item'):
+                return "COVASIFY: No track currently playing."
+
+            track = current['item']
+            track_id = track['id']
+            track_name = track['name']
+            artist_name = track['artists'][0]['name']
+
+            is_saved = self.sp.current_user_saved_tracks_contains([track_id])[0]
+
+            if action == 'save':
+                if is_saved:
+                    return f"COVASIFY: '{track_name}' is already in your Liked Songs."
+                self.sp.current_user_saved_tracks_add([track_id])
+                log('info', f'COVASIFY: Saved "{track_name}"')
+                return f"COVASIFY: Added '{track_name}' by {artist_name} to Liked Songs."
+
+            elif action == 'remove':
+                if not is_saved:
+                    return f"COVASIFY: '{track_name}' is not in your Liked Songs."
+                self.sp.current_user_saved_tracks_delete([track_id])
+                log('info', f'COVASIFY: Removed "{track_name}"')
+                return f"COVASIFY: Removed '{track_name}' by {artist_name} from Liked Songs."
+
+            else:
+                return f"COVASIFY: Unknown library action '{action}'. Use: save, remove."
+
+        except Exception as e:
+            log('error', f'COVASIFY library error: {str(e)}')
+            return f"COVASIFY: Library action failed - {str(e)}"
+
+    # -------------------------------------------------------------------------
+    # CONSOLIDATED TOOL: covasify_bindings
+    # Replaces: covasify_bind_track, covasify_play_bound, covasify_list_bindings,
+    #           covasify_unbind, covasify_unbind_all
+    # -------------------------------------------------------------------------
+
+    def covasify_bindings(self, args, projected_states) -> str:
+        """Manage phrase-to-track bindings."""
+        try:
+            if not self.sp and args.action not in ['list', 'clear']:
+                return "COVASIFY: Not connected to Spotify."
+
+            action = (args.action or '').lower()
+            phrase = args.phrase or ''
+
+            if action == 'bind':
+                return self._bind_track(phrase)
+            elif action == 'play':
+                return self._play_bound(phrase)
+            elif action == 'list':
+                return self._list_bindings()
+            elif action == 'remove':
+                return self._unbind(phrase)
+            elif action == 'clear':
+                return self._unbind_all()
+            else:
+                return f"COVASIFY: Unknown bindings action '{action}'. Use: bind, play, list, remove, clear."
+
+        except Exception as e:
+            log('error', f'COVASIFY bindings error: {str(e)}')
+            return f"COVASIFY: Bindings action failed - {str(e)}"
+
+    def _bind_track(self, phrase: str) -> str:
+        normalized_phrase = self.normalize_phrase(phrase)
+        if not normalized_phrase:
+            return "COVASIFY: No phrase provided."
+
+        self.update_current_track_info()
+        if not self.current_track_info:
+            return "COVASIFY: No track currently playing to bind. Play a track first."
+
+        bindings = self.load_bindings()
+        bindings[normalized_phrase] = {
+            'track_uri': self.current_track_info['track_uri'],
+            'track_name': self.current_track_info['track_name'],
+            'artist_name': self.current_track_info['artist_name'],
+            'album_name': self.current_track_info['album_name']
+        }
+
+        if self.save_bindings(bindings):
+            return f"COVASIFY: Bound '{self.current_track_info['track_name']}' by {self.current_track_info['artist_name']} to phrase '{phrase}'."
+        return "COVASIFY: Failed to save binding."
+
+    def _play_bound(self, phrase: str) -> str:
+        normalized_phrase = self.normalize_phrase(phrase)
+        if not normalized_phrase:
+            return "COVASIFY: No phrase provided."
+
+        bindings = self.load_bindings()
+        if normalized_phrase not in bindings:
+            return f"COVASIFY: No track bound to phrase '{phrase}'."
+
+        binding = bindings[normalized_phrase]
+        device_id = self._get_device_id()
+        if not device_id:
+            return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
+
+        self.sp.start_playback(device_id=device_id, uris=[binding['track_uri']])
+        self.update_current_track_info()
+        return f"COVASIFY: Playing '{binding['track_name']}' by {binding['artist_name']}."
+
+    def _list_bindings(self) -> str:
+        bindings = self.load_bindings()
+        if not bindings:
+            return "COVASIFY: No track bindings found."
+        lines = [f"- '{p}' -> {info['track_name']} by {info['artist_name']}" for p, info in bindings.items()]
+        return f"COVASIFY: {len(bindings)} binding(s):\n" + "\n".join(lines)
+
+    def _unbind(self, phrase: str) -> str:
+        normalized_phrase = self.normalize_phrase(phrase)
+        if not normalized_phrase:
+            return "COVASIFY: No phrase provided."
+
+        bindings = self.load_bindings()
+        if normalized_phrase not in bindings:
+            return f"COVASIFY: No track bound to phrase '{phrase}'."
+
+        track_name = bindings[normalized_phrase]['track_name']
+        artist_name = bindings[normalized_phrase]['artist_name']
+        del bindings[normalized_phrase]
+
+        if self.save_bindings(bindings):
+            return f"COVASIFY: Unbound '{track_name}' by {artist_name} from phrase '{phrase}'."
+        return "COVASIFY: Failed to save updated bindings."
+
+    def _unbind_all(self) -> str:
+        bindings = self.load_bindings()
+        count = len(bindings)
+        if count == 0:
+            return "COVASIFY: No track bindings to remove."
+        if self.save_bindings({}):
+            return f"COVASIFY: Removed all {count} track binding(s)."
+        return "COVASIFY: Failed to clear bindings."
+
+    # -------------------------------------------------------------------------
+    # ON-DEMAND TOOL: covasify_status
+    # Called by the LLM only when the user explicitly asks about the current track.
+    # Makes a live Spotify API call for full detail (progress, album, etc.)
+    # -------------------------------------------------------------------------
+
+    def covasify_status(self, args, projected_states) -> str:
+        """Get detailed info about the currently playing track on demand."""
+        try:
+            if not self.sp:
+                return "COVASIFY: Not connected to Spotify."
+
+            current = self.sp.current_playback()
+            if not current or not current.get('item'):
+                return "COVASIFY: No track currently playing."
+
+            track = current['item']
+            track_name = track['name']
+            artists = ', '.join([a['name'] for a in track['artists']])
+            album = track['album']['name']
+
+            progress_ms = current.get('progress_ms', 0)
+            duration_ms = track.get('duration_ms', 0)
+            progress_min = progress_ms // 60000
+            progress_sec = (progress_ms % 60000) // 1000
+            duration_min = duration_ms // 60000
+            duration_sec = (duration_ms % 60000) // 1000
+
+            is_playing = current.get('is_playing', False)
+            state = "Playing" if is_playing else "Paused"
+
+            self.update_current_track_info()
+
+            return (
+                f"COVASIFY: {state} '{track_name}' by {artists} "
+                f"from '{album}'. "
+                f"Progress: {progress_min}:{progress_sec:02d} / {duration_min}:{duration_sec:02d}."
+            )
+
+        except Exception as e:
+            log('error', f'COVASIFY status error: {str(e)}')
+            return f"COVASIFY: Failed to get track info - {str(e)}"
+
+    # -------------------------------------------------------------------------
+    # INTERNAL HELPERS
+    # -------------------------------------------------------------------------
+
+    def _set_track_state(self, state: str):
+        """Update local track state cache (playing/paused) without an API call."""
+        if self.current_track_info:
+            self.current_track_info['state'] = state
+
+    def update_current_track_info(self):
+        """Update local cache of current track after any play action."""
+        try:
+            if not self.sp:
+                return
+            current = self.sp.current_playback()
+            if not current or not current.get('item'):
+                self.current_track_info = None
+                return
+            track = current['item']
+            self.current_track_info = {
+                'track_uri': track['uri'],
+                'track_name': track['name'],
+                'artist_name': ', '.join([a['name'] for a in track['artists']]),
+                'album_name': track['album']['name'],
+                'track_id': track['id'],
+                'state': 'playing' if current.get('is_playing', True) else 'paused'
+            }
+        except Exception as e:
+            log('error', f'COVASIFY: Error updating track info: {str(e)}')
+            self.current_track_info = None
+
+    def get_plugin_folder_path(self) -> str:
+        try:
+            return os.path.dirname(os.path.abspath(__file__))
         except:
             try:
                 appdata = os.getenv('APPDATA')
@@ -412,12 +1004,11 @@ class COVASIFYPlugin(PluginBase):
 
     def load_credentials(self) -> dict:
         try:
-            # Settings are FLAT — not nested under "spotify_credentials"
+            log('info', 'COVASIFY: Attempting to read credentials from Settings UI')
             client_id = self.settings.get('client_id')
             client_secret = self.settings.get('client_secret')
             redirect_uri = self.settings.get('redirect_uri')
 
-            # If UI settings are complete, use them
             if client_id and client_secret:
                 log('info', 'COVASIFY: Credentials loaded from Settings UI')
                 return {
@@ -428,7 +1019,6 @@ class COVASIFYPlugin(PluginBase):
 
             log('warning', 'COVASIFY: Settings UI incomplete — falling back to spotify_credentials.txt')
 
-            # --- Fallback to file ---
             plugin_folder = self.get_plugin_folder_path()
             cred_file = os.path.join(plugin_folder, 'spotify_credentials.txt')
 
@@ -444,7 +1034,6 @@ class COVASIFYPlugin(PluginBase):
                         credentials[key.strip()] = value.strip()
 
             if 'CLIENT_ID' in credentials and 'CLIENT_SECRET' in credentials:
-                log('info', 'COVASIFY: Credentials loaded from spotify_credentials.txt (fallback)')
                 credentials.setdefault('REDIRECT_URI', 'http://127.0.0.1:8888/callback')
                 return credentials
 
@@ -455,16 +1044,11 @@ class COVASIFYPlugin(PluginBase):
             log('error', f'COVASIFY: Error loading credentials: {str(e)}')
             return None
 
-
     def initialize_spotify(self, credentials: dict):
         try:
-            log('info', "COVASIFY: Initializing Spotify")
-            data_path = self._get_data_path()
-            try:
-                os.makedirs(data_path, exist_ok=True)
-            except OSError:
-                pass
-            cache_path = os.path.join(data_path, '_spotify_cache')
+            log('info', f"COVASIFY: Initializing Spotify with Client ID: {credentials['CLIENT_ID'][:10]}...")
+            plugin_folder = self.get_plugin_folder_path()
+            cache_path = os.path.join(plugin_folder, '_spotify_cache')
 
             auth_manager = SpotifyOAuth(
                 client_id=credentials['CLIENT_ID'],
@@ -475,18 +1059,14 @@ class COVASIFYPlugin(PluginBase):
                 open_browser=False
             )
 
-            # Check if we already have a valid cached token
             token_info = auth_manager.get_cached_token()
 
             if not (token_info and not auth_manager.is_token_expired(token_info)):
-                # Need fresh auth - reset class-level auth code first
                 SpotifyAuthCallbackHandler.auth_code = None
-
                 server = start_spotify_callback_server()
                 log('info', "COVASIFY: Local OAuth callback server started on 127.0.0.1:8888")
 
                 auth_url = auth_manager.get_authorize_url()
-                log('info', f"COVASIFY: Opening browser for Spotify auth: {auth_url}")
                 webbrowser.open(auth_url)
 
                 log('info', "COVASIFY: Waiting for Spotify authorization code...")
@@ -502,9 +1082,7 @@ class COVASIFYPlugin(PluginBase):
                     return False
 
                 code = SpotifyAuthCallbackHandler.auth_code
-                log('info', f"COVASIFY: Received Spotify auth code: {code[:10]}...")
                 server.shutdown()
-                log('info', "COVASIFY: OAuth callback server shut down")
 
                 token_info = auth_manager.get_access_token(code, as_dict=True)
                 if not token_info:
@@ -512,13 +1090,10 @@ class COVASIFYPlugin(PluginBase):
                     return False
             else:
                 log('info', 'COVASIFY: Valid cached token found, skipping OAuth flow')
-            log('info', "COVASIFY: Access token obtained and cached")
 
-            # Create Spotify client
             self.sp = spotipy.Spotify(auth_manager=auth_manager)
             user = self.sp.current_user()
             log('info', f"COVASIFY: Connected to Spotify as {user['display_name']}")
-
             return True
 
         except Exception as e:
@@ -526,704 +1101,10 @@ class COVASIFYPlugin(PluginBase):
             self.sp = None
             return False
 
-    def update_current_track_info(self):
-        """Update cached info about currently playing track for binding"""
-        try:
-            if not self.sp:
-                return
-            
-            current = self.sp.current_playback()
-            if not current or not current.get('item'):
-                self.current_track_info = None
-                return
-            
-            track = current['item']
-            self.current_track_info = {
-                'track_uri': track['uri'],
-                'track_name': track['name'],
-                'artist_name': ', '.join([artist['name'] for artist in track['artists']]),
-                'album_name': track['album']['name'],
-                'track_id': track['id']
-            }
-            
-        except Exception as e:
-            log('error', f'COVASIFY: Error updating current track info: {str(e)}')
-            self.current_track_info = None
-
-    def covasify_test(self, args, projected_states) -> str:
-        """Test function (like Songbird's songbird_test)"""
-        try:
-            log('info', 'COVASIFY: Running test')
-            
-            version = self.plugin_manifest.version
-            name = self.plugin_manifest.name
-            
-            # Check if Spotify client is initialized
-            if self.sp:
-                return f"COVASIFY Test: {name} v{version} - Active and connected to Spotify."
-            else:
-                plugin_folder = self.get_plugin_folder_path()
-                return f"COVASIFY Test: {name} v{version} - Active but not connected. Check credentials at: {plugin_folder}"
-                
-        except Exception as e:
-            log('error', f'COVASIFY test error: {str(e)}')
-            return f"COVASIFY: Test failed - {str(e)}"
-
-    def covasify_play_track(self, args, projected_states) -> str:
-        """Search for and play a track on Spotify (like Songbird's play_sound)"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify. Check credentials."
-            
-            query = args.query
-            if not query:
-                return "COVASIFY: No search query provided."
-            
-            log('info', f'COVASIFY: Searching for track: {query}')
-            
-            # Search for track with caching - fetch multiple for better matching
-            def search_track(endpoint, params):
-                return self.sp.search(q=params['q'], type='track', limit=10)
-            
-            results = self.reliability_client.get_cached_or_fetch(
-                'spotify_search_track',
-                {'q': query},
-                search_track
-            )
-            
-            if not results['tracks']['items']:
-                return f"COVASIFY: No tracks found for '{query}'."
-            
-            # Pick best match by scoring each result against the query
-            query_lower = query.lower()
-            query_words = set(query_lower.split())
-
-            def score_track(t):
-                name = t['name'].lower()
-                artist = t['artists'][0]['name'].lower()
-                combined = f"{name} {artist}"
-                combined_words = set(combined.split())
-                overlap = len(query_words & combined_words)
-                exact = 2 if query_lower in combined else 0
-                length_diff = abs(len(name) - len(query_lower))
-                return overlap + exact - (length_diff * 0.05)
-
-            track = max(results['tracks']['items'], key=score_track)
-            track_name = track['name']
-            artist_name = track['artists'][0]['name']
-            track_uri = track['uri']
-            album_uri = track['album']['uri']
-            log('info', f"COVASIFY: Best match: '{track_name}' by {artist_name}")
-            
-            # Get available devices
-            devices = self.sp.devices()
-            if not devices['devices']:
-                return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
-            
-            device_id = devices['devices'][0]['id']
-            self.sp.transfer_playback(device_id, force_play=True)
-            self.sp.start_playback(
-                device_id=device_id,
-                context_uri=album_uri,
-                offset={"uri": track_uri}
-)
-
-            
-            # Update current track info for binding
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Playing {track_name} by {artist_name}')
-            return f"COVASIFY: Now playing {track_name} by {artist_name}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY play_track error: {str(e)}')
-            return f"COVASIFY: Failed to play track - {str(e)}"
-
-    def covasify_control(self, args, projected_states) -> str:
-        """Control Spotify playback (like Songbird's songbird_control)"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            command = args.command.lower()
-            
-            log('info', f'COVASIFY: Control command: {command}')
-            
-            # Normalize command variations
-            if command in ['pause', 'stop']:
-                self.sp.pause_playback()
-                log('info', 'COVASIFY: Paused playback')
-                return "COVASIFY: Playback paused."
-                
-            elif command in ['resume', 'play', 'unpause']:
-                self.sp.start_playback()
-                log('info', 'COVASIFY: Resumed playback')
-                return "COVASIFY: Playback resumed."
-                
-            elif command in ['next', 'skip', 'skip_forward', 'next_track']:
-                self.sp.next_track()
-                # Update current track info
-                self.update_current_track_info()
-                log('info', 'COVASIFY: Skipped to next track')
-                return "COVASIFY: Skipped to next track."
-                
-            elif command in ['previous', 'back', 'skip_back', 'previous_track']:
-                self.sp.previous_track()
-                # Update current track info
-                self.update_current_track_info()
-                log('info', 'COVASIFY: Skipped to previous track')
-                return "COVASIFY: Skipped to previous track."
-                
-            elif command in ['restart', 'restart_track', 'restart_song', 'start_over', 'from_beginning']:
-                current = self.sp.current_playback()
-                if current and current.get('device'):
-                    device_id = current['device']['id']
-                    self.sp.seek_track(position_ms=0, device_id=device_id)
-                    log('info', 'COVASIFY: Restarted current track')
-                    return "COVASIFY: Restarted current track from beginning."
-                else:
-                    return "COVASIFY: No active playback to restart."
-                
-            elif command in ['volume_up', 'louder', 'increase_volume']:
-                current = self.sp.current_playback()
-                if current and current.get('device'):
-                    current_volume = current['device']['volume_percent']
-                    new_volume = min(100, current_volume + 10)
-                    self.sp.volume(new_volume)
-                    log('info', f'COVASIFY: Volume increased to {new_volume}%')
-                    return f"COVASIFY: Volume increased to {new_volume}%."
-                return "COVASIFY: No active playback to adjust volume."
-                
-            elif command in ['volume_down', 'quieter', 'decrease_volume']:
-                current = self.sp.current_playback()
-                if current and current.get('device'):
-                    current_volume = current['device']['volume_percent']
-                    new_volume = max(0, current_volume - 10)
-                    self.sp.volume(new_volume)
-                    log('info', f'COVASIFY: Volume decreased to {new_volume}%')
-                    return f"COVASIFY: Volume decreased to {new_volume}%."
-                return "COVASIFY: No active playback to adjust volume."
-                
-            elif command in ['volume_set', 'set_volume']:
-                value = args.value if args.value is not None else 50
-                value = max(0, min(100, value))
-                self.sp.volume(value)
-                log('info', f'COVASIFY: Volume set to {value}%')
-                return f"COVASIFY: Volume set to {value}%."
-                
-            elif command in ['mute', 'silence']:
-                self.sp.volume(0)
-                log('info', 'COVASIFY: Muted')
-                return "COVASIFY: Muted."
-                
-            elif command in ['unmute', 'unsilence']:
-                self.sp.volume(50)
-                log('info', 'COVASIFY: Unmuted to 50%')
-                return "COVASIFY: Unmuted to 50%."
-                
-            elif command in ['shuffle_on', 'enable_shuffle', 'shuffle']:
-                self.sp.shuffle(True)
-                log('info', 'COVASIFY: Shuffle enabled')
-                return "COVASIFY: Shuffle enabled."
-                
-            elif command in ['shuffle_off', 'disable_shuffle', 'no_shuffle']:
-                self.sp.shuffle(False)
-                log('info', 'COVASIFY: Shuffle disabled')
-                return "COVASIFY: Shuffle disabled."
-                
-            elif command in ['repeat_track', 'repeat_song', 'repeat_one']:
-                self.sp.repeat('track')
-                log('info', 'COVASIFY: Repeat track enabled')
-                return "COVASIFY: Repeat track enabled."
-                
-            elif command in ['repeat_context', 'repeat_all', 'repeat_playlist']:
-                self.sp.repeat('context')
-                log('info', 'COVASIFY: Repeat context enabled')
-                return "COVASIFY: Repeat all enabled."
-                
-            elif command in ['repeat_off', 'disable_repeat', 'no_repeat']:
-                self.sp.repeat('off')
-                log('info', 'COVASIFY: Repeat disabled')
-                return "COVASIFY: Repeat disabled."
-                
-            else:
-                return f"COVASIFY: Unknown command '{command}'."
-                
-        except Exception as e:
-            log('error', f'COVASIFY control error: {str(e)}')
-            return f"COVASIFY: Control failed - {str(e)}"
-
-    def covasify_current(self, args, projected_states) -> str:
-        """Get information about currently playing track (like Songbird tracking current sound)"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            current = self.sp.current_playback()
-            
-            if not current or not current.get('item'):
-                return "COVASIFY: No track currently playing."
-            
-            track = current['item']
-            track_name = track['name']
-            artists = ', '.join([artist['name'] for artist in track['artists']])
-            album = track['album']['name']
-            
-            # Get progress info
-            progress_ms = current.get('progress_ms', 0)
-            duration_ms = track.get('duration_ms', 0)
-            progress_min = progress_ms // 60000
-            progress_sec = (progress_ms % 60000) // 1000
-            duration_min = duration_ms // 60000
-            duration_sec = (duration_ms % 60000) // 1000
-            
-            # Update current track info for binding
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Current track - {track_name} by {artists}')
-            
-            return f"COVASIFY: Now playing '{track_name}' by {artists} from the album '{album}'. Progress: {progress_min}:{progress_sec:02d} / {duration_min}:{duration_sec:02d}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY current track error: {str(e)}')
-            return f"COVASIFY: Failed to get current track info - {str(e)}"
-
-    def covasify_seek(self, args, projected_states) -> str:
-        """Seek to specific position in track - handles multiple time formats"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            time_input = args.time_input.strip()
-            
-            if not time_input:
-                return "COVASIFY: No time position provided."
-            
-            log('info', f'COVASIFY: Seek request: {time_input}')
-            
-            # Parse time input to milliseconds
-            position_ms = self._parse_time_to_ms(time_input)
-            
-            if position_ms is None:
-                return f"COVASIFY: Could not parse time '{time_input}'. Use format like '2:30' or '150' seconds."
-            
-            # Get current playback to check track duration
-            current = self.sp.current_playback()
-            
-            if not current or not current.get('item'):
-                return "COVASIFY: No track currently playing to seek."
-            
-            track = current['item']
-            track_name = track['name']
-            duration_ms = track.get('duration_ms', 0)
-            
-            # Check if position is within track duration
-            if position_ms > duration_ms:
-                duration_min = duration_ms // 60000
-                duration_sec = (duration_ms % 60000) // 1000
-                return f"COVASIFY: Position {time_input} exceeds track duration ({duration_min}:{duration_sec:02d})."
-            
-            # Seek to position
-            device_id = current['device']['id']
-            self.sp.seek_track(position_ms, device_id=device_id)
-            
-            # Format position for response
-            seek_min = position_ms // 60000
-            seek_sec = (position_ms % 60000) // 1000
-            
-            log('info', f'COVASIFY: Seeked to {seek_min}:{seek_sec:02d} in {track_name}')
-            return f"COVASIFY: Seeked to {seek_min}:{seek_sec:02d} in {track_name}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY seek error: {str(e)}')
-            return f"COVASIFY: Failed to seek - {str(e)}"
-
-    def _parse_time_to_ms(self, time_input: str) -> int:
-        """Parse time string to milliseconds - handles MM:SS, H:MM:SS, or seconds"""
-        try:
-            time_input = time_input.strip().lower()
-            
-            # Remove common words
-            time_input = time_input.replace('minutes', '').replace('minute', '')
-            time_input = time_input.replace('seconds', '').replace('second', '')
-            time_input = time_input.replace('and', '').strip()
-            
-            # Check if it's just a number (seconds)
-            if time_input.isdigit():
-                return int(time_input) * 1000
-            
-            # Check for MM:SS or H:MM:SS format
-            if ':' in time_input:
-                parts = time_input.split(':')
-                
-                if len(parts) == 2:
-                    # MM:SS format
-                    minutes = int(parts[0])
-                    seconds = int(parts[1])
-                    return (minutes * 60 + seconds) * 1000
-                    
-                elif len(parts) == 3:
-                    # H:MM:SS format
-                    hours = int(parts[0])
-                    minutes = int(parts[1])
-                    seconds = int(parts[2])
-                    return (hours * 3600 + minutes * 60 + seconds) * 1000
-            
-            # Try to extract numbers (e.g., "2 minutes 30 seconds")
-            numbers = re.findall(r'\d+', time_input)
-            
-            if len(numbers) == 2:
-                # Assume first is minutes, second is seconds
-                minutes = int(numbers[0])
-                seconds = int(numbers[1])
-                return (minutes * 60 + seconds) * 1000
-            elif len(numbers) == 1:
-                # Just one number - assume seconds
-                return int(numbers[0]) * 1000
-            
-            return None
-            
-        except Exception as e:
-            log('error', f'COVASIFY: Error parsing time {time_input}: {str(e)}')
-            return None
-
-    def covasify_play_playlist(self, args, projected_states) -> str:
-        """Play a Spotify playlist"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            query = args.query.lower()
-            shuffle = args.shuffle
-            
-            if not query:
-                return "COVASIFY: No playlist name provided."
-            
-            log('info', f'COVASIFY: Searching for playlist: {query}')
-            
-            # Get available devices
-            devices = self.sp.devices()
-            if not devices['devices']:
-                return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
-            
-            device_id = devices['devices'][0]['id']
-            
-            # Handle "Liked Songs" specially
-            if 'liked' in query or 'saved' in query or 'favorite' in query:
-                saved_tracks = self.sp.current_user_saved_tracks(limit=50)
-                if not saved_tracks['items']:
-                    return "COVASIFY: No liked songs found."
-                
-                track_uris = [item['track']['uri'] for item in saved_tracks['items']]
-                
-                self.sp.start_playback(device_id=device_id, uris=track_uris)
-                if shuffle:
-                    self.sp.shuffle(True, device_id=device_id)
-                
-                # Update current track info
-                self.update_current_track_info()
-                
-                log('info', 'COVASIFY: Playing Liked Songs')
-                return f"COVASIFY: Playing your Liked Songs{' (shuffled)' if shuffle else ''}."
-            
-            # Search for playlist by name with caching
-            def search_playlist(endpoint, params):
-                return self.sp.search(q=params['q'], type='playlist', limit=5)
-            
-            results = self.reliability_client.get_cached_or_fetch(
-                'spotify_search_playlist',
-                {'q': query},
-                search_playlist
-            )
-            
-            if not results['playlists']['items']:
-                return f"COVASIFY: No playlists found for '{query}'."
-            
-            # Get first matching playlist
-            playlist = results['playlists']['items'][0]
-            playlist_name = playlist['name']
-            playlist_uri = playlist['uri']
-            
-            # Check if playlist_uri is valid
-            if not playlist_uri:
-                return f"COVASIFY: Found playlist '{playlist_name}' but cannot access it."
-            
-            self.sp.start_playback(device_id=device_id, context_uri=playlist_uri)
-            if shuffle:
-                self.sp.shuffle(True, device_id=device_id)
-            
-            # Update current track info
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Playing playlist {playlist_name}')
-            return f"COVASIFY: Playing playlist '{playlist_name}'{' (shuffled)' if shuffle else ''}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY play_playlist error: {str(e)}')
-            return f"COVASIFY: Failed to play playlist - {str(e)}"
-
-    def covasify_play_artist(self, args, projected_states) -> str:
-        """Play music from an artist using artist context - lets Spotify handle the queue naturally"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            query = args.query
-            shuffle = args.shuffle
-            
-            if not query:
-                return "COVASIFY: No artist provided."
-            
-            log('info', f'COVASIFY: Playing artist: {query}')
-            
-            # Get available devices
-            devices = self.sp.devices()
-            if not devices['devices']:
-                return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
-            
-            device_id = devices['devices'][0]['id']
-            
-            # Search for artist with caching
-            def search_artist(endpoint, params):
-                return self.sp.search(q=params['q'], type='artist', limit=1)
-            
-            artist_results = self.reliability_client.get_cached_or_fetch(
-                'spotify_search_artist',
-                {'q': query},
-                search_artist
-            )
-            
-            if not artist_results['artists']['items']:
-                return f"COVASIFY: Could not find artist '{query}'."
-            
-            artist = artist_results['artists']['items'][0]
-            artist_name = artist['name']
-            artist_id = artist['id']
-            artist_uri = f"spotify:artist:{artist_id}"
-            
-            log('info', f'COVASIFY: Found artist {artist_name} with ID {artist_id}')
-            
-            # Play from artist context - Spotify handles queue naturally
-            self.sp.start_playback(device_id=device_id, context_uri=artist_uri)
-            
-            # Enable shuffle if requested
-            if shuffle:
-                self.sp.shuffle(True, device_id=device_id)
-            
-            # Update current track info
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Playing {artist_name} from artist context (shuffle: {shuffle})')
-            return f"COVASIFY: Playing {artist_name}{' (shuffled)' if shuffle else ''} - Spotify will queue their music naturally."
-            
-        except Exception as e:
-            log('error', f'COVASIFY play_artist error: {str(e)}')
-            return f"COVASIFY: Failed to play artist - {str(e)}"
-
-    def covasify_play_top_tracks(self, args, projected_states) -> str:
-        """Play an artist's most popular songs"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            query = args.query
-            if not query:
-                return "COVASIFY: No artist provided."
-            
-            log('info', f'COVASIFY: Getting top tracks for: {query}')
-            
-            # Get available devices
-            devices = self.sp.devices()
-            if not devices['devices']:
-                return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
-            
-            device_id = devices['devices'][0]['id']
-            
-            # Search for artist with caching
-            def search_artist(endpoint, params):
-                return self.sp.search(q=params['q'], type='artist', limit=1)
-            
-            artist_results = self.reliability_client.get_cached_or_fetch(
-                'spotify_search_artist',
-                {'q': query},
-                search_artist
-            )
-            
-            if not artist_results['artists']['items']:
-                return f"COVASIFY: Could not find artist '{query}'."
-            
-            artist = artist_results['artists']['items'][0]
-            artist_name = artist['name']
-            artist_id = artist['id']
-            
-            log('info', f'COVASIFY: Found artist {artist_name} with ID {artist_id}')
-            
-            # Get top tracks
-            top_tracks = self.sp.artist_top_tracks(artist_id)
-            
-            if not top_tracks['tracks']:
-                return f"COVASIFY: No top tracks found for {artist_name}."
-            
-            track_uris = [track['uri'] for track in top_tracks['tracks']]
-            
-            # Play top tracks
-            self.sp.start_playback(device_id=device_id, uris=track_uris)
-            
-            # Update current track info
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Playing {len(track_uris)} top tracks by {artist_name}')
-            return f"COVASIFY: Playing {len(track_uris)} most popular songs by {artist_name}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY play_top_tracks error: {str(e)}')
-            return f"COVASIFY: Failed to play top tracks - {str(e)}"
-
-    def covasify_play_album(self, args, projected_states) -> str:
-        """Play a complete album on Spotify"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            query = args.query
-            shuffle = args.shuffle  # Default false - most people want album order
-            
-            if not query:
-                return "COVASIFY: No album name provided."
-            
-            log('info', f'COVASIFY: Searching for album: {query}')
-            
-            # Get available devices
-            devices = self.sp.devices()
-            log('info', f"COVASIFY: Available devices: {devices['devices']}")
-
-
-            if not devices['devices']:
-                return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
-            
-            device_id = devices['devices'][0]['id']
-            
-            # Search for album with caching
-            def search_album(endpoint, params):
-                return self.sp.search(q=params['q'], type='album', limit=1)
-            
-            album_results = self.reliability_client.get_cached_or_fetch(
-                'spotify_search_album',
-                {'q': query},
-                search_album
-            )
-            
-            if not album_results['albums']['items']:
-                return f"COVASIFY: Could not find album '{query}'."
-            
-            album = album_results['albums']['items'][0]
-            album_name = album['name']
-            artist_name = album['artists'][0]['name']
-            album_uri = album['uri']
-            total_tracks = album['total_tracks']
-            
-            log('info', f'COVASIFY: Found album "{album_name}" by {artist_name} ({total_tracks} tracks)')
-            
-            # Play album from context
-            self.sp.start_playback(device_id=device_id, context_uri=album_uri)
-            
-            # Apply shuffle if requested
-            if shuffle:
-                self.sp.shuffle(True, device_id=device_id)
-            
-            # Update current track info
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Playing album "{album_name}" by {artist_name} (shuffle: {shuffle})')
-            return f"COVASIFY: Playing album '{album_name}' by {artist_name} ({total_tracks} tracks){' (shuffled)' if shuffle else ''}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY play_album error: {str(e)}')
-            return f"COVASIFY: Failed to play album - {str(e)}"
-
-    def covasify_save_track(self, args, projected_states) -> str:
-        """Save currently playing track to Liked Songs"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            log('info', 'COVASIFY: Attempting to save current track')
-            
-            # Get currently playing track
-            current = self.sp.current_playback()
-            
-            if not current or not current.get('item'):
-                return "COVASIFY: No track currently playing to save."
-            
-            track = current['item']
-            track_id = track['id']
-            track_name = track['name']
-            artist_name = track['artists'][0]['name']
-            
-            # Check if already saved
-            is_saved = self.sp.current_user_saved_tracks_contains([track_id])
-            
-            if is_saved[0]:
-                log('info', f'COVASIFY: Track "{track_name}" already in library')
-                return f"COVASIFY: '{track_name}' by {artist_name} is already in your Liked Songs."
-            
-            # Save track to library
-            self.sp.current_user_saved_tracks_add([track_id])
-            
-            log('info', f'COVASIFY: Saved "{track_name}" by {artist_name} to library')
-            return f"COVASIFY: Added '{track_name}' by {artist_name} to your Liked Songs."
-            
-        except Exception as e:
-            log('error', f'COVASIFY save_track error: {str(e)}')
-            return f"COVASIFY: Failed to save track - {str(e)}"
-
-    def covasify_remove_track(self, args, projected_states) -> str:
-        """Remove currently playing track from Liked Songs"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            log('info', 'COVASIFY: Attempting to remove current track from library')
-            
-            # Get currently playing track
-            current = self.sp.current_playback()
-            
-            if not current or not current.get('item'):
-                return "COVASIFY: No track currently playing to remove."
-            
-            track = current['item']
-            track_id = track['id']
-            track_name = track['name']
-            artist_name = track['artists'][0]['name']
-            
-            # Check if saved
-            is_saved = self.sp.current_user_saved_tracks_contains([track_id])
-            
-            if not is_saved[0]:
-                log('info', f'COVASIFY: Track "{track_name}" not in library')
-                return f"COVASIFY: '{track_name}' by {artist_name} is not in your Liked Songs."
-            
-            # Remove track from library
-            self.sp.current_user_saved_tracks_delete([track_id])
-            
-            log('info', f'COVASIFY: Removed "{track_name}" by {artist_name} from library')
-            return f"COVASIFY: Removed '{track_name}' by {artist_name} from your Liked Songs."
-            
-        except Exception as e:
-            log('error', f'COVASIFY remove_track error: {str(e)}')
-            return f"COVASIFY: Failed to remove track - {str(e)}"
-
     def get_bindings_file(self) -> str:
-        """Get path to bindings JSON file (uses plugin data path when available so bindings survive updates)."""
-        base = self._get_data_path()
-        try:
-            os.makedirs(base, exist_ok=True)
-        except OSError:
-            pass
-        return os.path.join(base, 'spotify_bindings.json')
+        return os.path.join(self.get_plugin_folder_path(), 'spotify_bindings.json')
 
     def load_bindings(self) -> dict:
-        """Load track bindings from file"""
         try:
             bindings_file = self.get_bindings_file()
             if os.path.exists(bindings_file):
@@ -1235,188 +1116,10 @@ class COVASIFYPlugin(PluginBase):
             return {}
 
     def save_bindings(self, bindings: dict) -> bool:
-        """Save track bindings to file"""
         try:
-            bindings_file = self.get_bindings_file()
-            with open(bindings_file, 'w', encoding='utf-8') as f:
+            with open(self.get_bindings_file(), 'w', encoding='utf-8') as f:
                 json.dump(bindings, f, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
             log('error', f'COVASIFY: Error saving bindings: {str(e)}')
             return False
-
-    def covasify_bind_track(self, args, projected_states) -> str:
-        """Bind currently playing track to a custom phrase"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            phrase = args.phrase
-            if not phrase:
-                return "COVASIFY: No phrase provided."
-            
-            normalized_phrase = self.normalize_phrase(phrase)
-            
-            if not normalized_phrase:
-                return "COVASIFY: Invalid phrase provided."
-            
-            log('info', f'COVASIFY: Binding request for phrase: "{phrase}" (normalized: "{normalized_phrase}")')
-            
-            # Update current track info
-            self.update_current_track_info()
-            
-            if not self.current_track_info:
-                return "COVASIFY: No track currently playing to bind. Play a track first."
-            
-            # Load existing bindings
-            bindings = self.load_bindings()
-            
-            # Add new binding with normalized phrase as key
-            bindings[normalized_phrase] = {
-                'track_uri': self.current_track_info['track_uri'],
-                'track_name': self.current_track_info['track_name'],
-                'artist_name': self.current_track_info['artist_name'],
-                'album_name': self.current_track_info['album_name']
-            }
-            
-            # Save bindings
-            if self.save_bindings(bindings):
-                log('info', f'COVASIFY: Bound "{self.current_track_info["track_name"]}" to phrase "{normalized_phrase}"')
-                return f"COVASIFY: Bound '{self.current_track_info['track_name']}' by {self.current_track_info['artist_name']} to phrase '{phrase}'."
-            else:
-                return "COVASIFY: Failed to save binding."
-            
-        except Exception as e:
-            log('error', f'COVASIFY bind_track error: {str(e)}')
-            return f"COVASIFY: Failed to bind track - {str(e)}"
-
-    def covasify_play_bound(self, args, projected_states) -> str:
-        """Play a track bound to a custom phrase"""
-        try:
-            if not self.sp:
-                return "COVASIFY: Not connected to Spotify."
-            
-            phrase = args.phrase
-            if not phrase:
-                return "COVASIFY: No phrase provided."
-            
-            # Normalize phrase for matching
-            normalized_phrase = self.normalize_phrase(phrase)
-            
-            log('info', f'COVASIFY: Playing bound track for phrase: "{phrase}" (normalized: "{normalized_phrase}")')
-            
-            # Load bindings
-            bindings = self.load_bindings()
-            
-            # Check if phrase exists (bindings are already normalized when saved)
-            if normalized_phrase not in bindings:
-                return f"COVASIFY: No track bound to phrase '{phrase}'. Use 'list bindings' to see available phrases."
-            
-            binding = bindings[normalized_phrase]
-            track_uri = binding['track_uri']
-            track_name = binding['track_name']
-            artist_name = binding['artist_name']
-            
-            # Get available devices
-            devices = self.sp.devices()
-            if not devices['devices']:
-                return "COVASIFY: No active Spotify devices found. Open Spotify on a device first."
-            
-            device_id = devices['devices'][0]['id']
-            
-            # Play the bound track
-            self.sp.start_playback(device_id=device_id, uris=[track_uri])
-            
-            # Update current track info
-            self.update_current_track_info()
-            
-            log('info', f'COVASIFY: Playing bound track: {track_name}')
-            return f"COVASIFY: Playing '{track_name}' by {artist_name}."
-            
-        except Exception as e:
-            log('error', f'COVASIFY play_bound error: {str(e)}')
-            return f"COVASIFY: Failed to play bound track - {str(e)}"
-
-    def covasify_list_bindings(self, args, projected_states) -> str:
-        """List all track bindings"""
-        try:
-            log('info', 'COVASIFY: Listing bindings')
-            
-            bindings = self.load_bindings()
-            
-            if not bindings:
-                return "COVASIFY: No track bindings found. Use 'bind this to [phrase]' to create bindings."
-            
-            binding_list = []
-            for phrase, info in bindings.items():
-                track_name = info['track_name']
-                artist_name = info['artist_name']
-                binding_list.append(f"- '{phrase}' -> {track_name} by {artist_name}")
-            
-            result = f"COVASIFY: Found {len(bindings)} track bindings:\n" + "\n".join(binding_list)
-            
-            log('info', f'COVASIFY: Listed {len(bindings)} bindings')
-            return result
-            
-        except Exception as e:
-            log('error', f'COVASIFY list_bindings error: {str(e)}')
-            return f"COVASIFY: Failed to list bindings - {str(e)}"
-
-    def covasify_unbind(self, args, projected_states) -> str:
-        """Remove a specific track binding"""
-        try:
-            phrase = args.phrase
-            if not phrase:
-                return "COVASIFY: No phrase provided."
-            
-            # Normalize phrase for matching
-            normalized_phrase = self.normalize_phrase(phrase)
-            
-            log('info', f'COVASIFY: Unbind request for phrase: "{phrase}" (normalized: "{normalized_phrase}")')
-            
-            # Load bindings
-            bindings = self.load_bindings()
-            
-            # Check if phrase exists
-            if normalized_phrase not in bindings:
-                return f"COVASIFY: No track bound to phrase '{phrase}'."
-            
-            track_name = bindings[normalized_phrase]['track_name']
-            artist_name = bindings[normalized_phrase]['artist_name']
-            
-            # Remove binding
-            del bindings[normalized_phrase]
-            
-            # Save updated bindings
-            if self.save_bindings(bindings):
-                log('info', f'COVASIFY: Unbound phrase "{normalized_phrase}"')
-                return f"COVASIFY: Unbound '{track_name}' by {artist_name} from phrase '{phrase}'."
-            else:
-                return "COVASIFY: Failed to save updated bindings."
-            
-        except Exception as e:
-            log('error', f'COVASIFY unbind error: {str(e)}')
-            return f"COVASIFY: Failed to unbind - {str(e)}"
-
-    def covasify_unbind_all(self, args, projected_states) -> str:
-        """Remove all track bindings"""
-        try:
-            log('info', 'COVASIFY: Unbind all request')
-            
-            # Load current bindings to count them
-            bindings = self.load_bindings()
-            count = len(bindings)
-            
-            if count == 0:
-                return "COVASIFY: No track bindings to remove."
-            
-            # Clear all bindings
-            if self.save_bindings({}):
-                log('info', f'COVASIFY: Removed all {count} bindings')
-                return f"COVASIFY: Removed all {count} track bindings."
-            else:
-                return "COVASIFY: Failed to clear bindings."
-            
-        except Exception as e:
-            log('error', f'COVASIFY unbind_all error: {str(e)}')
-            return f"COVASIFY: Failed to unbind all - {str(e)}"
