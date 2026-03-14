@@ -1,5 +1,5 @@
-# Covasify v3.0.0
-NOTE: This was essentially re-written using Claude/ChatGPT(Colpilot). I - Lag0matic -barely know python, and there may be bugs or flaws.
+# Covasify v4.0.0
+NOTE: This was essentially re-written using Claude/ChatGPT(Copilot). I - Lag0matic - barely know python, and there may be bugs or flaws.
 
 Voice-controlled Spotify integration for COVAS NEXT. Play music, control playback, and bind tracks to custom voice commands.
 
@@ -11,7 +11,8 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 - Control playback (pause, skip, seek, volume, shuffle, repeat)
 - Save tracks to your Liked Songs
 - **Bind tracks to custom phrases** - Say "workout intro" to instantly play your bound track
-- Get current track info
+- Get current track info on demand
+- **COVAS always knows what's playing** - no need to ask first
 
 ## Installation
 
@@ -33,7 +34,7 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 
 3. Open COVAS NEXT menu → Navigate to **Covasify Spotify Integration** settings
 
-4. Enter your credentials (see **[SETUP.md](SETUP.md)** for step-by-step “what do I enter?”):
+4. Enter your credentials (see **[SETUP.md](SETUP.md)** for step-by-step "what do I enter?"):
    - **Client ID**: Paste your Spotify Client ID
    - **Client Secret**: Paste your Spotify Client Secret
    - **Redirect URI**: Leave as default `http://127.0.0.1:8888/callback`
@@ -71,7 +72,7 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 ### Library
 
 ```
-"What's playing?"
+"What's playing?"                 # Full track detail on demand
 "Save this track"
 "Remove this track"
 ```
@@ -86,12 +87,6 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 "Unbind all"
 ```
 
-### Performance
-
-```
-"Show Covasify cache stats"
-```
-
 ## Troubleshooting
 
 **"No active Spotify devices found"**
@@ -99,14 +94,13 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 
 **"Not connected to Spotify"**
 - Check Settings UI has valid credentials entered
-- Delete `.spotify_cache` and restart COVAS to re-authenticate
-- Test with: "Test Covasify"
+- Delete `_spotify_cache` and restart COVAS to re-authenticate
 
 **Binding doesn't play immediately**
 - Say the phrase again if needed (plugin overrides COVAS safety protocols but may need retry on first attempt)
 
 **Need to re-authorize**
-- Delete the OAuth cache (e.g. `_spotify_cache` in the plugin’s data folder under COVAS `plugin_data`, or the file/folder in your plugin folder if you’re on an older install)
+- Delete the OAuth cache (e.g. `_spotify_cache` in the plugin's data folder under COVAS `plugin_data`, or the file/folder in your plugin folder if you're on an older install)
 - Restart COVAS - browser will open for re-auth on first command
 
 ## What's NOT Possible
@@ -125,12 +119,22 @@ Covasify/
   - deps/                    # Bundled dependencies
 ```
 
-**Persistent data** (bindings and OAuth token cache) is stored in COVAS:NEXT’s plugin data folder (by plugin GUID), not inside the plugin folder. That way your bindings and login survive when you update or replace the plugin. To re-authorize, remove the token cache from that data folder or use the Troubleshooting steps below.
+**Persistent data** (bindings and OAuth token cache) is stored in COVAS:NEXT's plugin data folder (by plugin GUID), not inside the plugin folder. That way your bindings and login survive when you update or replace the plugin. To re-authorize, remove the token cache from that data folder or use the Troubleshooting steps above.
 
 ## Version History
+
+**v4.0.0** - Major token optimisation refactor by Lag0matic and AI
+- Consolidated 15 tools down to 5 (`covasify_play`, `covasify_control`, `covasify_library`, `covasify_bindings`, `covasify_status`) — reduces per-turn LLM token cost by ~65–70%
+- Added ambient now-playing status: COVAS always knows the current track and play/pause state without needing to call a tool
+- Seek is now part of `covasify_control` rather than a separate tool (`command="seek"`, `value_str="2:30"`)
+- Removed `covasify_test` and `covasify_cache_stats` from global tool registration (debug tools no longer contribute to per-turn token cost)
+- Removed background polling thread — no unnecessary Spotify API calls between commands
+- Pause/resume state now tracked locally so status reflects it instantly at zero API cost
+- Reduced param models from 7 to 4
+
 **v3.0.0** - Re-worked by Lag0matic and AI to function again!
 
-**v2.0.0** - Settings UI integration, credential management via COVAS NEXT menu  
+**v2.0.0** - Settings UI integration, credential management via COVAS NEXT menu
 
 **v1.0.0** - Initial release
 
