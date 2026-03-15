@@ -1,49 +1,59 @@
 # Covasify v4.0.0
-NOTE: This was essentially re-written using Claude/ChatGPT(Copilot). I - Lag0matic - barely know python, and there may be bugs or flaws.
 
-Voice-controlled Spotify integration for COVAS NEXT. Play music, control playback, and bind tracks to custom voice commands.
+> ⚠️ **Note:** This plugin was built with AI assistance (Claude). I'm not a Python expert — there may be bugs or rough edges. Feedback welcome!
 
-**⚠️ Requires Spotify Premium** - Free accounts cannot use playback control features.
+Voice-controlled Spotify integration for [COVAS:NEXT](https://ratherrude.github.io/Elite-Dangerous-AI-Integration/). Play music, control playback, and bind tracks to custom voice phrases — all hands-free.
+
+**⚠️ Requires Spotify Premium** — Free accounts cannot use playback control features.
 
 ## What It Does
 
-- Play tracks, albums, artists, and playlists by voice
-- Control playback (pause, skip, seek, volume, shuffle, repeat)
-- Save tracks to your Liked Songs
-- **Bind tracks to custom phrases** - Say "workout intro" to instantly play your bound track
-- Get current track info on demand
-- **COVAS always knows what's playing** - no need to ask first
+- **Play by voice** — tracks, albums, artists, playlists, and your Liked Songs
+- **Full playback control** — pause, skip, seek, volume, shuffle, repeat
+- **Liked Songs** — save or remove the current track by voice
+- **Track bindings** — bind any track to a custom phrase and play it instantly
+- **Ambient now-playing status** — COVAS always knows what's playing without being asked
 
-## Installation
+## How It Works
 
-**First time?** See **[SETUP.md](SETUP.md)** for exactly what to enter for Client ID, Client Secret, and Redirect URI in the COVAS client.
+Covasify connects to Spotify via OAuth and registers a set of voice-activated tools with COVAS:NEXT. A status generator passively pushes the current track and play/pause state into COVAS's context every turn at no extra cost, so she can reference what's playing naturally in conversation without needing to call a tool first.
 
-### 1. Get Spotify API Credentials
+---
 
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Create an app with these settings:
+## Setup
+
+### Step 1 — Get Spotify API Credentials
+
+1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+2. Click **Create App** with these settings:
    - **Redirect URI**: `http://127.0.0.1:8888/callback`
 3. Copy your **Client ID** and **Client Secret**
-4. Click the "USER MANAGEMENT" Tab at the top. Add your name and spotify email (I could not get it to work without this. Perhaps an update to spotify?)
+4. Click the **User Management** tab and add your name and Spotify email address
 
-### 2. Install Plugin
+### Step 2 — Install the Plugin
 
-1. Place the `Covasify` folder in: `%appdata%\com.covas-next.ui\plugins\`
+> ⚠️ **GitHub extraction note:** When downloading a release from GitHub, the zip file will extract to a folder named something like `Covasify-v4.0.0`. You must rename this folder to just `Covasify` before placing it in your plugins directory, otherwise COVAS:NEXT may not load it correctly.
 
-2. Restart COVAS NEXT
+1. Download the latest release and extract it
+2. Rename the folder to `Covasify` (strip the version suffix)
+3. Place the `Covasify` folder in:
+   ```
+   %appdata%\com.covas-next.ui\plugins\
+   ```
+4. Dependencies are bundled — no installation step needed
+5. Restart COVAS:NEXT
+6. Open the COVAS:NEXT menu → navigate to **Covasify Spotify Integration** settings
+7. Enter your credentials:
+   - **Client ID**: paste your Spotify Client ID
+   - **Client Secret**: paste your Spotify Client Secret
+   - **Redirect URI**: leave as default `http://127.0.0.1:8888/callback`
+8. Start your COVAS chat session — your browser will open for Spotify authorisation on first use (one-time only)
 
-3. Open COVAS NEXT menu → Navigate to **Covasify Spotify Integration** settings
+**Requirements:**
+- Spotify Premium account (mandatory — free accounts cannot control playback)
+- Active Spotify device (desktop app, mobile, or web player must be open)
 
-4. Enter your credentials (see **[SETUP.md](SETUP.md)** for step-by-step "what do I enter?"):
-   - **Client ID**: Paste your Spotify Client ID
-   - **Client Secret**: Paste your Spotify Client Secret
-   - **Redirect URI**: Leave as default `http://127.0.0.1:8888/callback`
-
-5. First use will open browser for Spotify authorization (one-time setup)
-
-**Requirements**: 
-- **Spotify Premium account** (mandatory - free accounts cannot control playback)
-- Active Spotify device (desktop app, mobile, or web player)
+---
 
 ## Voice Commands
 
@@ -53,9 +63,9 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 "Play Bohemian Rhapsody"          # Track search
 "Play Abbey Road album"           # Album
 "Play Queen"                      # Artist (shuffled)
-"Play Queen's top tracks"         # Top 10 hits
-"Play workout playlist"           # Playlists
-"Play Liked Songs"                # Your library
+"Play Queen's top tracks"         # Top 10 most popular tracks
+"Play workout playlist"           # Playlist by name
+"Play Liked Songs"                # Your saved library
 ```
 
 ### Playback Control
@@ -72,74 +82,84 @@ Voice-controlled Spotify integration for COVAS NEXT. Play music, control playbac
 ### Library
 
 ```
-"What's playing?"                 # Full track detail on demand
-"Save this track"
-"Remove this track"
+"What's playing?"                 # Full track detail including progress
+"Save this track"                 # Add to Liked Songs
+"Remove this track"               # Remove from Liked Songs
 ```
 
-### Bindings
+### Track Bindings
+
+Bind any currently playing track to a custom phrase and play it back instantly by saying that phrase.
 
 ```
-"Bind this to workout intro"      # Bind current track
-"Workout intro"                   # Play bound track
-"List bindings"
-"Unbind workout intro"
-"Unbind all"
+"Bind this to workout intro"      # Bind current track to a phrase
+"Workout intro"                   # Play the bound track
+"List bindings"                   # See all your bindings
+"Unbind workout intro"            # Remove a specific binding
+"Unbind all"                      # Clear all bindings
 ```
+
+---
 
 ## Troubleshooting
 
 **"No active Spotify devices found"**
-- Open Spotify on any device and start playing something first
+- Open Spotify on any device and start playing something first, then try again
 
 **"Not connected to Spotify"**
-- Check Settings UI has valid credentials entered
-- Delete `_spotify_cache` and restart COVAS to re-authenticate
+- Check your credentials are correctly entered in the plugin settings
+- Delete `_spotify_cache` from the plugin's data folder and restart COVAS to re-authenticate
+
+**Need to re-authorise**
+- Delete `_spotify_cache` from the plugin data folder (found under `%appdata%\com.covas-next.ui\plugin_data\` by plugin GUID)
+- Restart COVAS — your browser will open for re-auth on first command
 
 **Binding doesn't play immediately**
-- Say the phrase again if needed (plugin overrides COVAS safety protocols but may need retry on first attempt)
+- Say the phrase again — first-attempt retries are occasionally needed
 
-**Need to re-authorize**
-- Delete the OAuth cache (e.g. `_spotify_cache` in the plugin's data folder under COVAS `plugin_data`, or the file/folder in your plugin folder if you're on an older install)
-- Restart COVAS - browser will open for re-auth on first command
+---
 
 ## What's NOT Possible
 
-Due to Spotify API restrictions (November 2024):
-- True radio/recommendations (API deprecated for new apps)
-- Endless queue (API limitation - use artist/playlist playback instead)
+Due to Spotify API restrictions introduced in November 2024:
+- Radio / recommendations (API deprecated for new apps)
+- Endless smart queue (use artist or playlist playback instead)
 - Related artists suggestions (API blocked)
+
+---
 
 ## Files
 
 ```
 Covasify/
-  - Covasify.py              # Main plugin
-  - manifest.json            # Plugin metadata
-  - deps/                    # Bundled dependencies
+  Covasify.py              # Main plugin
+  manifest.json            # Plugin metadata
+  deps/                    # Bundled Python dependencies
 ```
 
-**Persistent data** (bindings and OAuth token cache) is stored in COVAS:NEXT's plugin data folder (by plugin GUID), not inside the plugin folder. That way your bindings and login survive when you update or replace the plugin. To re-authorize, remove the token cache from that data folder or use the Troubleshooting steps above.
+**Persistent data** (track bindings and OAuth token cache) is stored in COVAS:NEXT's plugin data folder by plugin GUID — not inside the plugin folder itself. Your bindings and login survive updates and reinstalls.
+
+---
 
 ## Version History
 
-**v4.0.0** - Major token optimisation refactor by Lag0matic and AI
-- Consolidated 15 tools down to 5 (`covasify_play`, `covasify_control`, `covasify_library`, `covasify_bindings`, `covasify_status`) — reduces per-turn LLM token cost by ~65–70%
-- Added ambient now-playing status: COVAS always knows the current track and play/pause state without needing to call a tool
-- Seek is now part of `covasify_control` rather than a separate tool (`command="seek"`, `value_str="2:30"`)
-- Removed `covasify_test` and `covasify_cache_stats` from global tool registration (debug tools no longer contribute to per-turn token cost)
+**v4.0.0** — Major token optimisation refactor by Lag0matic and AI
+- Consolidated 15 tools down to 5 — ~65–70% reduction in per-turn LLM token cost
+- Added ambient now-playing status — COVAS always knows the current track and play/pause state without a tool call
+- Seek moved into `covasify_control` — one less tool in the LLM's context
 - Removed background polling thread — no unnecessary Spotify API calls between commands
-- Pause/resume state now tracked locally so status reflects it instantly at zero API cost
-- Reduced param models from 7 to 4
+- Pause/resume state tracked locally at zero API cost
 
-**v3.0.0** - Re-worked by Lag0matic and AI to function again!
+**v3.0.0** — Re-worked by Lag0matic and AI to function again
 
-**v2.0.0** - Settings UI integration, credential management via COVAS NEXT menu
+**v2.0.0** — Settings UI integration, credential management via COVAS:NEXT menu
 
-**v1.0.0** - Initial release
+**v1.0.0** — Initial release
+
+---
 
 ## Credits
 
 **Author**: D. Trintignant  
-**COVAS NEXT**: https://ratherrude.github.io/Elite-Dangerous-AI-Integration/  
+**COVAS:NEXT**: https://ratherrude.github.io/Elite-Dangerous-AI-Integration/  
 **Spotify API**: Spotipy library
