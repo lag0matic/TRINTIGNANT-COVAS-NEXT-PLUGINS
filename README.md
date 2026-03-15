@@ -1,82 +1,60 @@
-ASSUME ALL PLUGINS DEAD EXCEPT COVASIFY!
+# COVAS:NEXT Plugins
 
+A collection of plugins for [COVAS:NEXT](https://ratherrude.github.io/Elite-Dangerous-AI-Integration/). Each plugin has its own README with installation instructions and usage details.
 
-# COVAS-NEXT-PLUGINS 
-This repository contains individual plugin packages for COVAS:NEXT (https://ratherrude.github.io/Elite-Dangerous-AI-Integration/)
-Each plugin has its own README with installation instructions and usage details.
+> ⚠️ **Stability notice:** Of the plugins in this collection, only **Covasify** is confirmed working against current versions of COVAS:NEXT. Songbird and Covinance are untested and may require updates to function.
+
+**Original plugins by [D. Trintignant](https://github.com/Tokyo8543485/TRINTIGNANT-COVAS-NEXT-PLUGINS).** Covasify has been updated and maintained by Lag0matic. Songbird and Covinance are carried forward from the original repository unchanged.
+
+---
 
 ## Available Plugins
 
-* **Songbird** — Voice-controlled sound effects from Freesound with local soundboard
-* **Covasify** — Spotify integration with voice-controlled playback and track binding
-* **Covinance** — Elite Dangerous commodity trading and market analysis via Ardent API
+| Plugin | Status | Description |
+|---|---|---|
+| **Covasify** | ✅ Stable | Voice-controlled Spotify playback and track binding |
+| **Songbird** | ❓ Unknown | Voice-controlled sound effects via Freesound |
+| **Covinance** | ❓ Unknown | Elite Dangerous commodity trading via Ardent API |
+
+- ✅ **Stable** — tested and confirmed working
+- ❓ **Unknown** — untested against current COVAS:NEXT; may require updates
+
+---
 
 ## Installation
 
-1. Download or clone this repository
-2. Copy the desired plugin folder(s) to `%appdata%\com.covas-next.ui\plugins\`
-3. Restart COVAS NEXT
-4. Configure plugin settings via COVAS NEXT menu (if required)
+> ⚠️ **GitHub extraction note:** When downloading a release from GitHub, the zip file extracts to a versioned folder (e.g. `Covasify-v4.0.0`). Rename it to just the plugin name (e.g. `Covasify`) before placing it in the plugins directory, otherwise COVAS:NEXT may not load it correctly.
 
-## Registered Actions (Quick Reference)
+1. Download the plugin release and extract it
+2. Rename the folder to strip the version suffix
+3. Copy the plugin folder to:
+   ```
+   %appdata%\com.covas-next.ui\plugins\
+   ```
+4. Restart COVAS:NEXT
+5. Configure plugin settings via the COVAS:NEXT menu if required
 
-### Songbird
-* `songbird_play_sound` — Play sounds from Freesound or local cache
-* `songbird_control` — Pause, resume, stop, restart, volume control, mute
-* `songbird_seek` — Seek to specific time position (MM:SS or seconds)
-* `songbird_current` — Get current sound info (duration, position, track)
-* `songbird_play_playlist` — Play folder as playlist (auto-advance, loop by default)
-* `songbird_playlist_info` — Get current playlist status
-* `songbird_playlist_contents` — Preview playlist tracks without playing
-* `songbird_list_playlists` — List all available playlists
-* `songbird_bind_sound` — Bind sounds to custom voice phrases
-* `songbird_replay_bound` — Play previously bound sound
-* `songbird_list_bound` — List all bound phrases
-* `songbird_unbind_sound` — Remove specific binding
-* `songbird_unbind_all` — Clear all bindings
-* `songbird_list_cached` — List all downloaded sounds
-* `songbird_delete_sound` — Delete specific cached sound
-* `songbird_delete_current` — Delete currently playing sound
-* `songbird_clear_sounds` — Delete sounds matching pattern
-* `songbird_clean_cache` — Delete all cached sounds
-* `songbird_cache_stats` — View cache performance metrics
+---
 
-### Covasify
-* `covasify_play_track` — Search and play tracks
-* `covasify_play_album` — Play complete albums
-* `covasify_play_artist` — Play artist's music (shuffled)
-* `covasify_play_top_tracks` — Play artist's top 10 hits
-* `covasify_play_playlist` — Play user playlists or Liked Songs
-* `covasify_control` — Pause, resume, next, previous, restart, stop, volume, mute, shuffle, repeat
-* `covasify_seek` — Seek to time position (MM:SS or seconds)
-* `covasify_current` — Get currently playing track info
-* `covasify_save_track` — Add track to Liked Songs
-* `covasify_remove_track` — Remove track from Liked Songs
-* `covasify_bind_track` — Bind current track to custom phrase
-* `covasify_play_bound` — Play previously bound track
-* `covasify_list_bindings` — List all track bindings
-* `covasify_unbind` — Remove specific binding
-* `covasify_unbind_all` — Clear all bindings
-* `covasify_cache_stats` — View cache performance metrics
+## Plugin Summary
 
-### Covinance
-* `covinance_best_buy` / `covinance_best_sell` — Find best commodity prices
-* `covinance_nearby_buy` / `covinance_nearby_sell` — Search within radius
-* `covinance_best_trade_from_here` — Optimal single-hop trade
-* `covinance_trade_route` — Best commodity for A→B route
-* `covinance_circular_route` — Multi-hop round-trip trading
-* `covinance_optimal_trade_now` — Journal-aware trade optimization
-* `covinance_list_rare_goods` — Discover rare goods within radius
-* `covinance_safe_interstellar_factors` — Find bounty clearance (Anarchy systems)
-* `covinance_find_service` — Locate nearest service/facility
-* Station/system info, market data, and 30+ more trading actions
+### Covasify ✅
+Voice-controlled Spotify integration. Play tracks, albums, artists and playlists by voice. Bind tracks to custom phrases. COVAS always knows what's playing without being asked. See [Covasify/README.md](Covasify/README.md) for full details.
 
-## Configuration
+**Requires:** Spotify Premium account + Spotify API credentials
 
-* **Songbird:** Requires Freesound API key (Settings → SONGBIRD)
-* **Covasify:** Requires Spotify API credentials (Settings → Covasify)
-* **Covinance:** No API key required (uses Ardent Insight API)
+### Songbird ❓
+Voice-controlled sound effects sourced from Freesound with local soundboard support. See [Songbird/README.md](Songbird/README.md) for full details.
+
+**Requires:** Freesound API key
+
+### Covinance ❓
+Elite Dangerous commodity trading and market analysis via the Ardent Insight API. See [Covinance/README.md](Covinance/README.md) for full details.
+
+**Requires:** Nothing — uses Ardent Insight API (no key needed)
+
+---
 
 ## License
 
-MIT License — See individual plugin folders for details.
+MIT License — see individual plugin folders for details.
