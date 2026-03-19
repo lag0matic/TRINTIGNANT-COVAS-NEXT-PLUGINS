@@ -69,6 +69,7 @@ class EmptyParams(BaseModel):
 class PlayParams(BaseModel):
     type: str               # "track", "artist", "artist_top", "album", "playlist"
     query: str
+    artist: Optional[str] = None  # separate artist field for more accurate track search
     shuffle: Optional[bool] = None  # None = use sensible default per type
 
 class ControlParams(BaseModel):
@@ -292,7 +293,7 @@ class COVASIFYPlugin(PluginBase):
             # 5 consolidated tools instead of 15
             helper.register_action(
                 'covasify_play',
-                "Play music on Spotify. type: track/artist/artist_top/album/playlist. shuffle optional.",
+                "Play music on Spotify. type: track/artist/artist_top/album/playlist. For tracks, use query for song name and artist for artist name to improve accuracy.",
                 PlayParams, self.covasify_play, 'global'
             )
             helper.register_action(
@@ -393,7 +394,7 @@ class COVASIFYPlugin(PluginBase):
             play_type = (args.type or '').lower().strip()
 
             if play_type == 'track':
-                return self._play_track(args.query)
+                return self._play_track(args.query, artist=args.artist)
             elif play_type == 'artist':
                 return self._play_artist(args.query, shuffle=args.shuffle if args.shuffle is not None else True)
             elif play_type == 'artist_top':
@@ -416,34 +417,75 @@ class COVASIFYPlugin(PluginBase):
             return None
         return devices['devices'][0]['id']
 
-    def _play_track(self, query: str) -> str:
+    def _play_track(self, query: str, artist: str = None) -> str:
         if not query:
             return "COVASIFY: No search query provided."
 
-        log('info', f'COVASIFY: Searching for track: {query}')
+        log('info', f'COVASIFY: Searching for track: {query}' + (f' by {artist}' if artist else ''))
+
+        # Build search query — if artist provided, include it plainly
+        # Spotify's field syntax (track: artist:) is unreliable for niche artists
+        if artist:
+            search_query = f'{query} {artist}'
+        else:
+            search_query = query
 
         def search_track(endpoint, params):
             return self.sp.search(q=params['q'], type='track', limit=10)
 
         results = self.reliability_client.get_cached_or_fetch(
-            'spotify_search_track', {'q': query}, search_track
+            'spotify_search_track', {'q': search_query}, search_track
         )
 
         if not results['tracks']['items']:
             return f"COVASIFY: No tracks found for '{query}'."
 
         query_lower = query.lower()
+        artist_lower = artist.lower() if artist else ''
         query_words = set(query_lower.split())
 
         def score_track(t):
             name = t['name'].lower()
-            artist = t['artists'][0]['name'].lower()
-            combined = f"{name} {artist}"
-            combined_words = set(combined.split())
-            overlap = len(query_words & combined_words)
-            exact = 2 if query_lower in combined else 0
+            track_artist = t['artists'][0]['name'].lower()
+
+            # Exact title match — must win decisively
+            if name == query_lower:
+                exact_name = 10
+            elif name.startswith(query_lower + ' ') or name.startswith(query_lower + '('):
+                exact_name = 6
+            elif query_lower in name:
+                exact_name = 2
+            else:
+                exact_name = 0
+
+            # Artist match — if artist provided, this is critical
+            artist_score = 0
+            if artist_lower:
+                if artist_lower == track_artist:
+                    artist_score = 8
+                elif artist_lower in track_artist or track_artist in artist_lower:
+                    artist_score = 4
+                else:
+                    # Wrong artist entirely — heavy penalty
+                    artist_score = -6
+
+            # Penalise variants unless user asked for them
+            variant_penalty = 0
+            variants = ['acoustic', 'remix', 'live', 'cover', 'remaster', 'remastered',
+                       'edit', 'instrumental', 'demo', 'radio edit', 'extended', 'karaoke',
+                       'largo', 'reprise', 'version', 'mix', 'dub']
+            if any(v in name for v in variants) and not any(v in query_lower for v in variants):
+                variant_penalty = 8
+
+            # Word overlap — only against track name, not artist
+            # Prevents tracks with artist name in title from getting unfair overlap bonus
+            name_words = set(name.split())
+            overlap = len(query_words & name_words)
+
+            # Penalise length difference
             length_diff = abs(len(name) - len(query_lower))
-            return overlap + exact - (length_diff * 0.05)
+
+            return exact_name + artist_score + overlap - variant_penalty - (length_diff * 0.05)
 
         track = max(results['tracks']['items'], key=score_track)
         track_name = track['name']
