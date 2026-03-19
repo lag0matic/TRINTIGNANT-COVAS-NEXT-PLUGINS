@@ -1,4 +1,4 @@
-# Covasify v4.0.0
+# Covasify v4.1.0
 
 > ⚠️ **Note:** This plugin was built with AI assistance (Claude). I'm not a Python expert — there may be bugs or rough edges. Feedback welcome!
 
@@ -142,7 +142,7 @@ Covasify/
 ---
 
 ## Version History
-
+**v4.1.0 — Improved track search accuracy. Added separate artist field for more precise matching, smarter scoring that heavily penalises covers, remixes, karaoke and live versions.**  
 **v4.0.0** — Major token optimisation refactor by Lag0matic and AI
 - Consolidated 15 tools down to 5 — ~65–70% reduction in per-turn LLM token cost
 - Added ambient now-playing status — COVAS always knows the current track and play/pause state without a tool call
