@@ -1,4 +1,4 @@
-# Covasify v4.1.0
+# Covasify v4.1.1
 
 > ⚠️ **Note:** This plugin was built with AI assistance (Claude). I'm not a Python expert — there may be bugs or rough edges. Feedback welcome!
 
@@ -13,10 +13,11 @@ Voice-controlled Spotify integration for [COVAS:NEXT](https://ratherrude.github.
 - **Liked Songs** — save or remove the current track by voice
 - **Track bindings** — bind any track to a custom phrase and play it instantly
 - **Ambient now-playing status** — COVAS always knows what's playing without being asked
+- **Live now-playing HUD** — ask COVAS to show a now-playing overlay on the GenUI display, complete with album art
 
 ## How It Works
 
-Covasify connects to Spotify via OAuth and registers a set of voice-activated tools with COVAS:NEXT. A status generator passively pushes the current track and play/pause state into COVAS's context every turn at no extra cost, so she can reference what's playing naturally in conversation without needing to call a tool first.
+Covasify connects to Spotify via OAuth and registers a set of voice-activated tools with COVAS:NEXT. A status generator passively pushes the current track and play/pause state into COVAS's context every turn at no extra cost, so it can reference what's playing naturally in conversation without needing to call a tool first.
 
 ---
 
@@ -32,7 +33,7 @@ Covasify connects to Spotify via OAuth and registers a set of voice-activated to
 
 ### Step 2 — Install the Plugin
 
-> ⚠️ **GitHub extraction note:** When downloading a release from GitHub, the zip file will extract to a folder named something like `Covasify-v4.0.0`. You must rename this folder to just `Covasify` before placing it in your plugins directory, otherwise COVAS:NEXT may not load it correctly.
+> ⚠️ **GitHub extraction note:** When downloading a release from GitHub, the zip file will extract to a folder named something like `Covasify-v4.1.1`. You must rename this folder to just `Covasify` before placing it in your plugins directory, otherwise COVAS:NEXT may not load it correctly.
 
 1. Download the latest release and extract it
 2. Rename the folder to `Covasify` (strip the version suffix)
@@ -101,6 +102,27 @@ Bind any currently playing track to a custom phrase and play it back instantly b
 
 ---
 
+## Now-Playing HUD (GenUI)
+
+Covasify provides a live now-playing projection to the COVAS:NEXT GenUI overlay system. Once connected, ask the AI to display it:
+
+```
+"Show what's playing on the HUD"
+"Add a now-playing widget to the display"
+"Put the current track on screen"
+```
+
+The overlay updates in real time as tracks change — no AI turn required and no token cost after the initial setup. The projection includes track name, artist, album, album art, playback progress, shuffle state, and repeat mode, giving the AI everything it needs to render a rich now-playing card.
+
+To adjust the style:
+```
+"Make the now-playing widget more transparent"
+"Move the now-playing card to the top right"
+"Make the album art larger"
+```
+
+---
+
 ## Troubleshooting
 
 **"No active Spotify devices found"**
@@ -142,7 +164,11 @@ Covasify/
 ---
 
 ## Version History
-**v4.1.0 — Improved track search accuracy. Added separate artist field for more precise matching, smarter scoring that heavily penalises covers, remixes, karaoke and live versions.**  
+
+**v4.1.1** — Added GenUI now-playing projection. Track name, artist, album, album art, progress, shuffle and repeat state are all exposed to the GenUI overlay system and update in real time as tracks change — zero token cost after initial setup.
+
+**v4.1.0** — Improved track search accuracy. Added separate artist field for more precise matching, smarter scoring that heavily penalises covers, remixes, karaoke and live versions.
+
 **v4.0.0** — Major token optimisation refactor by Lag0matic and AI
 - Consolidated 15 tools down to 5 — ~65–70% reduction in per-turn LLM token cost
 - Added ambient now-playing status — COVAS always knows the current track and play/pause state without a tool call
