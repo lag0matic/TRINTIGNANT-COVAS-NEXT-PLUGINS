@@ -57,6 +57,31 @@ from lib.Logger import log
 from lib.EventManager import Projection
 from lib.PluginBase import PluginBase, PluginManifest
 from lib.Event import Event
+from pydantic import Field
+from typing import List
+
+# ============================================================================
+# GENUI PROJECTION
+# Exposes now-playing state to the GenUI overlay system.
+# Updated directly whenever track info changes — no LLM turns required.
+# Ask COVAS "show what's playing on the HUD" to render it.
+# ============================================================================
+
+class SpotifyStateModel(BaseModel):
+    playing: bool = Field(default=False, description="Whether music is currently playing")
+    track: str = Field(default="", description="Current track name")
+    artist: str = Field(default="", description="Current artist name")
+    album: str = Field(default="", description="Current album name")
+    album_art_url: str = Field(default="", description="Album art image URL")
+    progress: str = Field(default="", description="Playback progress e.g. 2:34 / 4:12")
+    shuffle: bool = Field(default=False, description="Whether shuffle is enabled")
+    repeat: str = Field(default="off", description="Repeat mode: off/track/context")
+
+class SpotifyProjection(Projection[SpotifyStateModel]):
+    StateModel = SpotifyStateModel
+
+    def process(self, event: Event) -> None:
+        pass  # Updated directly by Covasify, not from game events
 
 # ============================================================================
 # PARAM MODELS
@@ -266,6 +291,7 @@ class COVASIFYPlugin(PluginBase):
         self.sp = None
         self.current_track_info = None
         self.settings = {}
+        self.spotify_projection = SpotifyProjection()
 
     def on_settings_changed(self, settings: dict):
         self.settings = settings
@@ -318,6 +344,10 @@ class COVASIFYPlugin(PluginBase):
             )
 
             log('info', 'COVASIFY: Actions registered successfully')
+
+            # Register GenUI projection
+            helper.register_projection(self.spotify_projection)
+            log('info', 'COVASIFY: Spotify projection registered')
         except Exception as e:
             log('error', f'COVASIFY: Failed during chat start: {str(e)}')
 
@@ -1011,23 +1041,61 @@ class COVASIFYPlugin(PluginBase):
             self.current_track_info['state'] = state
 
     def update_current_track_info(self):
-        """Update local cache of current track after any play action."""
+        """Update local cache and GenUI projection after any play action."""
         try:
             if not self.sp:
                 return
             current = self.sp.current_playback()
             if not current or not current.get('item'):
                 self.current_track_info = None
+                self.spotify_projection.state.playing = False
+                self.spotify_projection.state.track = ''
+                self.spotify_projection.state.artist = ''
+                self.spotify_projection.state.album = ''
+                self.spotify_projection.state.album_art_url = ''
+                self.spotify_projection.state.progress = ''
                 return
+
             track = current['item']
+            is_playing = current.get('is_playing', True)
+            artist_name = ', '.join([a['name'] for a in track['artists']])
+            album_name = track['album']['name']
+
+            # Album art — use largest available image
+            images = track['album'].get('images', [])
+            album_art_url = images[0]['url'] if images else ''
+
+            # Progress
+            duration_ms = track.get('duration_ms', 0)
+            progress_ms = current.get('progress_ms', 0)
+            def ms_to_str(ms):
+                s = ms // 1000
+                return f"{s // 60}:{s % 60:02d}"
+            progress_str = f"{ms_to_str(progress_ms)} / {ms_to_str(duration_ms)}" if duration_ms else ''
+
+            # Repeat mode
+            repeat_map = {'track': 'track', 'context': 'context', 'off': 'off'}
+            repeat = repeat_map.get(current.get('repeat_state', 'off'), 'off')
+
             self.current_track_info = {
                 'track_uri': track['uri'],
                 'track_name': track['name'],
-                'artist_name': ', '.join([a['name'] for a in track['artists']]),
-                'album_name': track['album']['name'],
+                'artist_name': artist_name,
+                'album_name': album_name,
                 'track_id': track['id'],
-                'state': 'playing' if current.get('is_playing', True) else 'paused'
+                'state': 'playing' if is_playing else 'paused'
             }
+
+            # Update GenUI projection
+            self.spotify_projection.state.playing = is_playing
+            self.spotify_projection.state.track = track['name']
+            self.spotify_projection.state.artist = artist_name
+            self.spotify_projection.state.album = album_name
+            self.spotify_projection.state.album_art_url = album_art_url
+            self.spotify_projection.state.progress = progress_str
+            self.spotify_projection.state.shuffle = current.get('shuffle_state', False)
+            self.spotify_projection.state.repeat = repeat
+
         except Exception as e:
             log('error', f'COVASIFY: Error updating track info: {str(e)}')
             self.current_track_info = None
