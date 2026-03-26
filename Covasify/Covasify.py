@@ -292,6 +292,8 @@ class COVASIFYPlugin(PluginBase):
         self.current_track_info = None
         self.settings = {}
         self.spotify_projection = SpotifyProjection()
+        self._poll_thread = None
+        self._poll_stop = threading.Event()
 
     def on_settings_changed(self, settings: dict):
         self.settings = settings
@@ -348,6 +350,11 @@ class COVASIFYPlugin(PluginBase):
             # Register GenUI projection
             helper.register_projection(self.spotify_projection)
             log('info', 'COVASIFY: Spotify projection registered')
+
+            # Start background polling to keep GenUI projection fresh
+            self._poll_stop.clear()
+            self._poll_thread = threading.Thread(target=self._projection_poll_loop, daemon=True)
+            self._poll_thread.start()
         except Exception as e:
             log('error', f'COVASIFY: Failed during chat start: {str(e)}')
 
@@ -377,6 +384,17 @@ class COVASIFYPlugin(PluginBase):
     @override
     def on_chat_stop(self, helper: PluginHelper):
         log('info', 'COVASIFY: Chat stopped')
+        self._poll_stop.set()
+
+    def _projection_poll_loop(self):
+        """Poll Spotify every 10 seconds to keep the GenUI projection fresh.
+        Only updates the projection — does not fire COVAS events or cost tokens."""
+        while not self._poll_stop.wait(10.0):
+            try:
+                if self.sp:
+                    self.update_current_track_info()
+            except Exception:
+                pass
 
     # -------------------------------------------------------------------------
     # STATUS GENERATOR
@@ -390,20 +408,12 @@ class COVASIFYPlugin(PluginBase):
             if not self.sp:
                 return [("Spotify", "Not connected")]
 
-            info = self.current_track_info
-            if not info:
-                return [("Spotify", "No track playing")]
-
-            name = info.get('track_name', 'Unknown')
-            artist = info.get('artist_name', 'Unknown')
-            state = info.get('state', 'playing')
-            label = "Paused" if state == "paused" else "Playing"
-
-            # Include bindings count only if any exist, to keep status compact
+            # Track info is now handled by the SpotifyProjection for GenUI.
+            # Status only reports connection state to avoid conflicting with projection.
+            state = "Paused" if self.current_track_info and self.current_track_info.get('state') == 'paused' else "Playing" if self.current_track_info else "Idle"
             bindings = self.load_bindings()
             binding_note = f" | {len(bindings)} binding(s)" if bindings else ""
-
-            return [("Spotify", f"{label}: {name} — {artist}{binding_note}")]
+            return [("Spotify", f"{state}{binding_note}")]
 
         except Exception as e:
             log('error', f'COVASIFY: Error generating status: {str(e)}')
